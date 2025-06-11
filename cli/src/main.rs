@@ -11,9 +11,7 @@ fn report<E: Error>(src: &str, err: Spand<E>) {
     eprintln!("error:{}:{}: {}", lo.line, lo.column, err.kind);
 }
 
-fn main() -> rustyline::Result<()> {
-    let mut rl = DefaultEditor::new()?;
-
+fn repl(rl: &mut DefaultEditor) -> rustyline::Result<()> {
     loop {
         let input = rl.readline(">> ")?;
 
@@ -37,4 +35,9 @@ fn main() -> rustyline::Result<()> {
         let x = eval(&expr);
         println!("{x}");
     }
+}
+
+fn main() -> rustyline::Result<()> {
+    let mut rl = DefaultEditor::new()?;
+    repl(&mut rl)
 }

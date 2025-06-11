@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 thiserror = "2.0.12"
 
+[lints.rust]
+unsafe_code = "forbid"
+
 [lints.clippy]
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
