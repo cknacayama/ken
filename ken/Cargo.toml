@@ -4,15 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-thiserror = "2.0.12"
-
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-enum_glob_use = { level = "deny", priority = -1 }
-
-missing_panics_doc = "allow"
-missing_errors_doc = "allow"
+rustyline = "16.0.0"
+kenc = { path = "../kenc" }
+kenvm = { path = "../kenvm" }

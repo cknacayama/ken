@@ -129,27 +129,3 @@ pub enum ExprKind {
 }
 
 pub type Expr = Spand<ExprKind>;
-
-#[must_use]
-pub fn eval(expr: &Expr) -> f64 {
-    match &expr.kind {
-        ExprKind::Number(x) => *x,
-        ExprKind::Prefix { op, expr } => {
-            let x = eval(expr);
-            match op {
-                PrefixOp::Neg => -x,
-            }
-        }
-        ExprKind::Infix { op, lhs, rhs } => {
-            let lhs = eval(lhs);
-            let rhs = eval(rhs);
-            match op {
-                InfixOp::Add => lhs + rhs,
-                InfixOp::Sub => lhs - rhs,
-                InfixOp::Mul => lhs * rhs,
-                InfixOp::Div => lhs / rhs,
-                InfixOp::Pow => lhs.powf(rhs),
-            }
-        }
-    }
-}

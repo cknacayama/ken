@@ -109,6 +109,24 @@ impl<'a> Lexer<'a> {
         Token::new(TokenKind::Number(s), self.make_span())
     }
 
+    fn ident(&mut self) -> Token<'a> {
+        fn try_kw(s: &str) -> TokenKind<'_> {
+            match s {
+                "fn" => TokenKind::KwFn,
+                "ret" => TokenKind::KwRet,
+                "if" => TokenKind::KwIf,
+                "else" => TokenKind::KwElse,
+                _ => TokenKind::Ident(s),
+            }
+        }
+
+        self.eat_while(|c| c.is_ascii_alphanumeric() || c == '_');
+        let s = self.view();
+        let kind = try_kw(s);
+        let span = self.make_span();
+        Token::new(kind, span)
+    }
+
     pub fn next_token(&mut self) -> Option<LexResult<Token<'a>>> {
         macro_rules! token {
             ($name:ident) => {
@@ -127,12 +145,15 @@ impl<'a> Lexer<'a> {
         match c {
             '(' => token!(LParen),
             ')' => token!(RParen),
+            '{' => token!(LBrace),
+            '}' => token!(RBrace),
             '+' => token!(Plus),
             '-' => token!(Minus),
             '*' => token!(Star),
             '/' => token!(Slash),
             '^' => token!(Caret),
             '0'..='9' => token!(self.number()),
+            'a'..='z' | 'A'..='Z' | '_' => token!(self.ident()),
 
             _ => Some(Err(LexError::new(
                 LexErrorKind::InvalidChar(c),

@@ -1,9 +1,10 @@
 use std::error::Error;
 
-use ken::ast::eval;
-use ken::lexer::Lexer;
-use ken::parser::Parser;
-use ken::span::Spand;
+use kenc::codegen::Codegen;
+use kenc::lexer::Lexer;
+use kenc::parser::Parser;
+use kenc::span::Spand;
+use kenvm::Vm;
 use rustyline::DefaultEditor;
 
 fn report<E: Error>(src: &str, err: Spand<E>) {
@@ -12,6 +13,7 @@ fn report<E: Error>(src: &str, err: Spand<E>) {
 }
 
 fn repl(rl: &mut DefaultEditor) -> rustyline::Result<()> {
+    let mut vm = Vm::new();
     loop {
         let input = rl.readline(">> ")?;
 
@@ -31,9 +33,14 @@ fn repl(rl: &mut DefaultEditor) -> rustyline::Result<()> {
                 continue;
             }
         };
+        let mut code = Codegen::new(0);
+        code.compile_expr(expr);
+        let function = code.finish();
 
-        let x = eval(&expr);
-        println!("{x}");
+        match vm.run(&function) {
+            Ok((ret, _)) => println!("{ret}"),
+            Err(err) => eprintln!("{err:?}"),
+        }
     }
 }
 

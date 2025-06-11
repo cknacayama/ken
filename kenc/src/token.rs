@@ -3,6 +3,7 @@ use crate::span::Spand;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind<'a> {
     Number(&'a str),
+    Ident(&'a str),
 
     Plus,
     Minus,
@@ -12,6 +13,13 @@ pub enum TokenKind<'a> {
 
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+
+    KwFn,
+    KwRet,
+    KwIf,
+    KwElse,
 }
 
 pub type Token<'a> = Spand<TokenKind<'a>>;
