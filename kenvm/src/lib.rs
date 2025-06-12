@@ -3,23 +3,11 @@ pub mod bytecode;
 pub mod obj;
 pub mod value;
 
+use kenspan::Span;
+
 use crate::bytecode::Op;
 use crate::obj::{Function, Obj};
 use crate::value::{Convert, Value};
-
-#[derive(Debug, Clone, Copy)]
-pub enum RuntimeError {
-    TypeError,
-    NotEnoughArgs,
-    BorrowError,
-    FrameUnderflow,
-    StackUnderflow,
-    StackOverflow,
-    NoInstruction,
-    NoValue,
-}
-
-pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -49,6 +37,11 @@ impl<'a> Frame<'a> {
             bp,
             ip: 0,
         }
+    }
+
+    #[must_use]
+    pub fn fetch_span(&self) -> Span {
+        self.function.chunk().fetch_span(self.ip - 1)
     }
 
     pub fn fetch(&mut self) -> Option<Op> {
@@ -118,19 +111,23 @@ impl Vm {
         Ok(())
     }
 
-    pub fn run<'a>(&mut self, function: &'a Function) -> RuntimeResult<(Value, Frame<'a>)> {
+    pub fn run<'a>(&mut self, function: &'a Function) -> FrameResult<(Value, Frame<'a>)> {
         let sp = self.sp();
-
-        let debug = self.debug;
 
         let mut frame = self.create_frame(function);
         let ret = loop {
-            match self.eval_next(&mut frame).inspect_err(|_| {
-                let _ = self.restore_sp(sp);
-            })? {
-                Status::Finished(ret) => break ret,
-                Status::Running if debug => self.debug(),
-                Status::Running => {}
+            if self.debug {
+                self.debug();
+            }
+            match self.eval_next(&mut frame) {
+                Ok(Status::Running) => {}
+                Ok(Status::Finished(ret)) => break ret,
+                Err(mut err) => {
+                    let span = frame.fetch_span();
+                    let _ = self.restore_sp(sp);
+                    err.spans.push(span);
+                    return Err(err);
+                }
             }
         };
 
@@ -181,43 +178,60 @@ impl Vm {
         Ok(args)
     }
 
-    fn prefix_op<T: Convert>(&mut self, f: impl FnOnce(T) -> T) -> RuntimeResult<Status> {
+    fn prefix_op<T: Convert>(&mut self, f: impl FnOnce(T) -> T) -> RuntimeResult<()> {
         let value = self.pop_stack()?.try_into()?;
         let value = f(value);
         self.push_stack(value.into())?;
-        Ok(Status::Running)
+        Ok(())
     }
 
-    fn infix_op<T: Convert>(&mut self, f: impl FnOnce(T, T) -> T) -> RuntimeResult<Status> {
+    fn infix_op<T: Convert>(&mut self, f: impl FnOnce(T, T) -> T) -> RuntimeResult<()> {
         let rhs = self.pop_stack()?.try_into()?;
         let lhs = self.pop_stack()?.try_into()?;
         let value = f(lhs, rhs);
         self.push_stack(value.into())?;
-        Ok(Status::Running)
+        Ok(())
     }
 
-    fn eval_next(&mut self, frame: &mut Frame<'_>) -> RuntimeResult<Status> {
+    fn try_infix_op<T: Convert>(
+        &mut self,
+        f: impl FnOnce(T, T) -> RuntimeResult<T>,
+    ) -> RuntimeResult<()> {
+        let rhs = self.pop_stack()?.try_into()?;
+        let lhs = self.pop_stack()?.try_into()?;
+        let value = f(lhs, rhs)?;
+        self.push_stack(value.into())?;
+        Ok(())
+    }
+
+    fn eval_next(&mut self, frame: &mut Frame<'_>) -> FrameResult<Status> {
         let op = frame.fetch().ok_or(RuntimeError::NoInstruction)?;
 
+        let mut status = Status::Running;
+
         match op {
-            Op::Nop => Ok(Status::Running),
+            Op::Nop => {}
             Op::Pop => {
                 self.pop_stack()?;
-                Ok(Status::Running)
             }
             Op::Push(i) => {
                 let value = frame.fetch_value(i).ok_or(RuntimeError::NoValue)?;
                 self.push_stack(value)?;
-                Ok(Status::Running)
             }
 
-            Op::Add => self.infix_op::<f64>(|a, b| a + b),
-            Op::Sub => self.infix_op::<f64>(|a, b| a - b),
-            Op::Mul => self.infix_op::<f64>(|a, b| a * b),
-            Op::Div => self.infix_op::<f64>(|a, b| a / b),
+            Op::Add => self.infix_op::<f64>(|a, b| a + b)?,
+            Op::Sub => self.infix_op::<f64>(|a, b| a - b)?,
+            Op::Mul => self.infix_op::<f64>(|a, b| a * b)?,
+            Op::Div => self.try_infix_op::<f64>(|a, b| {
+                if b == 0.0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(a / b)
+                }
+            })?,
 
-            Op::Neg => self.prefix_op::<f64>(|x| -x),
-            Op::Not => self.prefix_op::<bool>(|x| !x),
+            Op::Neg => self.prefix_op::<f64>(|x| -x)?,
+            Op::Not => self.prefix_op::<bool>(|x| !x)?,
 
             Op::Call(count) => {
                 let value = self.pop_stack()?;
@@ -234,9 +248,8 @@ impl Vm {
                     let (ret, frame) = self.run(function)?;
                     self.restore_sp(frame.bp())?;
                     self.push_stack(ret)?;
-                    Ok(Status::Running)
                 } else {
-                    Err(RuntimeError::TypeError)
+                    return Err(FrameError::from(RuntimeError::TypeError));
                 }
             }
             Op::Load(i) => {
@@ -244,30 +257,77 @@ impl Vm {
                 let i = bp + i as usize;
                 let value = self.load(i)?;
                 self.push_stack(value)?;
-                Ok(Status::Running)
             }
             Op::Store(i) => {
                 let value = self.pop_stack()?;
                 let bp = frame.bp() as usize;
                 let i = bp + i as usize;
                 self.store(i, value)?;
-                Ok(Status::Running)
             }
             Op::Jmp(ip) => {
                 frame.jump(ip);
-                Ok(Status::Running)
             }
             Op::JmpIf(ip) => {
                 let cond = self.pop_stack()?.try_into()?;
                 if cond {
                     frame.jump(ip);
                 }
-                Ok(Status::Running)
             }
             Op::Ret => {
                 let ret = self.pop_stack()?;
-                Ok(Status::Finished(ret))
+                status = Status::Finished(ret);
             }
+        }
+
+        Ok(status)
+    }
+}
+
+#[derive(thiserror::Error, Debug, Clone, Copy)]
+pub enum RuntimeError {
+    #[error("division by zero")]
+    DivisionByZero,
+    #[error("type error")]
+    TypeError,
+    #[error("not enought arguments")]
+    NotEnoughArgs,
+    #[error("borrow error")]
+    BorrowError,
+    #[error("stack underflow")]
+    StackUnderflow,
+    #[error("stack overflow")]
+    StackOverflow,
+    #[error("no instruction to execute")]
+    NoInstruction,
+    #[error("no value")]
+    NoValue,
+}
+
+pub struct FrameError {
+    runtime: RuntimeError,
+    spans:   Vec<Span>,
+}
+
+impl FrameError {
+    #[must_use]
+    pub const fn runtime(&self) -> RuntimeError {
+        self.runtime
+    }
+
+    #[must_use]
+    pub fn spans(&self) -> &[Span] {
+        &self.spans
+    }
+}
+
+impl From<RuntimeError> for FrameError {
+    fn from(value: RuntimeError) -> Self {
+        Self {
+            runtime: value,
+            spans:   Vec::new(),
         }
     }
 }
+
+pub type RuntimeResult<T> = Result<T, RuntimeError>;
+pub type FrameResult<T> = Result<T, FrameError>;

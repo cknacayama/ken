@@ -1,5 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["ken", "kenc", "kenvm"]
+members = ["ken", "kenc", "kenspan", "kenvm"]
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
 
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+enum_glob_use = { level = "deny", priority = -1 }
+missing_panics_doc = "allow"
+missing_errors_doc = "allow"

@@ -1,13 +1,13 @@
 use std::str::Chars;
 
+use kenspan::{Span, Spand};
 use thiserror::Error;
 
-use crate::span::{Span, Spand};
 use crate::token::{Token, TokenKind};
 
 #[derive(Error, Debug, Clone, Copy)]
 pub enum LexErrorKind {
-    #[error("invalid character {0}")]
+    #[error("invalid character '{0}'")]
     InvalidChar(char),
 }
 
@@ -40,8 +40,22 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn lex_all(self) -> LexResult<Vec<Token<'a>>> {
-        self.collect()
+    pub fn lex_all(self) -> Result<Vec<Token<'a>>, Vec<LexError>> {
+        let mut tokens = Vec::new();
+        let mut errors = Vec::new();
+
+        for item in self {
+            match item {
+                Ok(ok) => tokens.push(ok),
+                Err(err) => errors.push(err),
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(tokens)
+        } else {
+            Err(errors)
+        }
     }
 
     fn first(&self) -> char {

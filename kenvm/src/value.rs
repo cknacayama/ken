@@ -24,31 +24,26 @@ impl Value {
     }
 }
 
-impl From<TypeError> for RuntimeError {
-    fn from(_value: TypeError) -> Self {
-        Self::TypeError
-    }
-}
-
-pub struct TypeError;
-pub trait Convert: TryFrom<Value, Error = TypeError> + Into<Value> {}
+pub trait Convert: TryFrom<Value, Error = RuntimeError> + Into<Value> {}
 
 macro_rules! value_impl {
     ($val:ty, $variant:ident) => {
         impl From<$val> for Value {
+            #[inline]
             fn from(value: $val) -> Self {
                 Self::$variant(value)
             }
         }
 
         impl TryFrom<Value> for $val {
-            type Error = TypeError;
+            type Error = RuntimeError;
 
+            #[inline]
             fn try_from(value: Value) -> Result<Self, Self::Error> {
                 if let Value::$variant(value) = value {
                     Ok(value)
                 } else {
-                    Err(TypeError)
+                    Err(RuntimeError::TypeError)
                 }
             }
         }

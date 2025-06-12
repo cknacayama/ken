@@ -1,4 +1,5 @@
-use crate::span::Spand;
+use kenspan::Spand;
+
 use crate::token::TokenKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

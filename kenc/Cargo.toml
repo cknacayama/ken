@@ -6,14 +6,7 @@ edition = "2024"
 [dependencies]
 thiserror = "2.0.12"
 kenvm = { path = "../kenvm" }
+kenspan = { path = "../kenspan" }
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-enum_glob_use = { level = "deny", priority = -1 }
-
-missing_panics_doc = "allow"
-missing_errors_doc = "allow"
+[lints]
+workspace = true

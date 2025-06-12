@@ -54,7 +54,6 @@ fn get_arg<T: Convert>(args: &[Value], pos: usize) -> RuntimeResult<T> {
         .cloned()
         .ok_or(RuntimeError::NotEnoughArgs)?
         .try_into()
-        .map_err(RuntimeError::from)
 }
 
 fn builtin_pow(args: &[Value]) -> RuntimeResult<Value> {

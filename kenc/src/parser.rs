@@ -1,7 +1,7 @@
+use kenspan::{Span, Spand};
 use thiserror::Error;
 
 use crate::ast::{Expr, ExprKind, InfixOp, Operator, PrefixOp};
-use crate::span::{Span, Spand};
 use crate::token::{Token, TokenKind};
 
 #[derive(Error, Debug, Clone, Copy)]
@@ -10,7 +10,7 @@ pub enum ParseErrorKind {
     UnexpectedEnd,
     #[error("invalid expression")]
     InvalidExpr,
-    #[error("expected {0:?}")]
+    #[error("expected '{0}'")]
     Expected(TokenKind<'static>),
 }
 
