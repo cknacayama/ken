@@ -1,7 +1,9 @@
 use kenspan::{Span, Spand};
 use thiserror::Error;
 
-use crate::ast::{Expr, ExprKind, InfixOp, Operator, PrefixOp};
+use crate::ast::{
+    self, Block, Expr, ExprKind, InfixOp, Item, ItemKind, Operator, PrefixOp, Stmt, StmtKind,
+};
 use crate::token::{Token, TokenKind};
 
 #[derive(Error, Debug, Clone, Copy)]
@@ -10,6 +12,12 @@ pub enum ParseErrorKind {
     UnexpectedEnd,
     #[error("invalid expression")]
     InvalidExpr,
+    #[error("expected expression")]
+    ExpectedExpr,
+    #[error("expected item")]
+    ExpectedItem,
+    #[error("expected identifier")]
+    ExpectedIdent,
     #[error("expected '{0}'")]
     Expected(TokenKind<'static>),
 }
@@ -40,6 +48,17 @@ impl<'a> Parser<'a> {
         self.peek_n(0)
     }
 
+    fn check<F>(&self, f: F) -> bool
+    where
+        F: FnOnce(Token<'a>) -> bool,
+    {
+        self.peek().is_none_or(f)
+    }
+
+    fn check_kind(&self, kind: TokenKind<'static>) -> bool {
+        self.check(|tk| tk.kind == kind)
+    }
+
     const fn eat_n(&mut self, n: usize) {
         self.current += n;
     }
@@ -48,35 +67,135 @@ impl<'a> Parser<'a> {
         self.eat_n(1);
     }
 
-    fn next(&mut self) -> Option<Token<'a>> {
-        let tk = self.peek()?;
-        self.current += 1;
-        Some(tk)
-    }
-
-    fn next_or_err(&mut self) -> ParseResult<Token<'a>> {
-        self.next()
-            .ok_or_else(|| ParseError::new(ParseErrorKind::UnexpectedEnd, self.last_span()))
-    }
-
-    fn expect(&mut self, kind: TokenKind<'static>) -> ParseResult<Span> {
+    fn next(&mut self) -> ParseResult<Token<'a>> {
         let tk = self
-            .next()
-            .ok_or_else(|| ParseError::new(ParseErrorKind::Expected(kind), self.last_span()))?;
-        let span = tk.span;
-        if tk.kind == kind {
-            Ok(span)
-        } else {
-            Err(ParseError::new(ParseErrorKind::Expected(kind), span))
+            .peek()
+            .ok_or_else(|| ParseError::new(ParseErrorKind::UnexpectedEnd, self.last_span()))?;
+        self.current += 1;
+        Ok(tk)
+    }
+
+    fn next_if_kind(&mut self, tk: TokenKind<'static>) -> Option<Span> {
+        match self.peek() {
+            Some(Token { kind, span }) if kind == tk => {
+                self.eat();
+                Some(span)
+            }
+            _ => None,
         }
     }
 
-    pub fn parse_expr(&mut self) -> ParseResult<Expr> {
+    fn expect(&mut self, expect: TokenKind<'static>) -> ParseResult<Span> {
+        let Token { kind, span } = self
+            .next()
+            .map_err(|err| ParseError::new(ParseErrorKind::Expected(expect), err.span))?;
+        if kind == expect {
+            Ok(span)
+        } else {
+            Err(ParseError::new(ParseErrorKind::Expected(expect), span))
+        }
+    }
+
+    fn expect_name(&mut self) -> ParseResult<&'a str> {
+        self.expect_ident().map(|id| id.kind)
+    }
+
+    fn expect_ident(&mut self) -> ParseResult<Spand<&'a str>> {
+        let Token { kind, span } = self
+            .next()
+            .map_err(|err| ParseError::new(ParseErrorKind::ExpectedIdent, err.span))?;
+        match kind {
+            TokenKind::Ident(id) => Ok(Spand::new(id, span)),
+            _ => Err(ParseError::new(ParseErrorKind::ExpectedIdent, span)),
+        }
+    }
+
+    pub fn parse_stmt(&mut self) -> ParseResult<Stmt<'a>> {
+        if let Some(Token {
+                kind: TokenKind::Semicolon,
+                span,
+            }) = self.peek() {
+            self.eat();
+            Ok(Stmt::new(StmtKind::Empty, span))
+        } else {
+            let expr = self.parse_expr()?;
+            if let Some(span) = self.next_if_kind(TokenKind::Semicolon) {
+                let span = expr.span.join(span);
+                let kind = StmtKind::Semi(expr);
+                Ok(Stmt::new(kind, span))
+            } else {
+                let span = expr.span;
+                let kind = StmtKind::Expr(expr);
+                Ok(Stmt::new(kind, span))
+            }
+        }
+    }
+
+    pub fn parse_item(&mut self) -> ParseResult<Item<'a>> {
+        let Token { kind, span } = self.next()?;
+        match kind {
+            TokenKind::KwLet => todo!(),
+            TokenKind::KwFn => {
+                let name = self.expect_name()?;
+                let (params, _) = self.expect_delimited(Paren, Self::expect_name)?;
+                let body = self.expect_block()?;
+                let span = span.join(body.span);
+                let kind = ItemKind::Fn(ast::Fn {
+                    name,
+                    params: params.into_boxed_slice(),
+                    body,
+                });
+                Ok(Item::new(kind, span))
+            }
+            _ => Err(ParseError::new(ParseErrorKind::ExpectedItem, span)),
+        }
+    }
+
+    pub fn parse_expr(&mut self) -> ParseResult<Expr<'a>> {
         let expr = self.parse_prefix()?;
         self.parse_infix(expr, 0)
     }
 
-    fn parse_infix(&mut self, mut lhs: Expr, min: u8) -> ParseResult<Expr> {
+    fn expect_delimited<D: Delim, T>(
+        &mut self,
+        delim: D,
+        parse: impl Fn(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<(Vec<T>, Span)> {
+        let opening = self.expect(D::opening())?;
+        self.parse_delimited(delim, opening, parse)
+    }
+
+    fn parse_delimited<D: Delim, T>(
+        &mut self,
+        _: D,
+        opening: Span,
+        parse: impl Fn(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<(Vec<T>, Span)> {
+        let mut data = Vec::new();
+
+        while !self.check_kind(D::closing()) {
+            let res = parse(self)?;
+            data.push(res);
+            if D::separator().is_some_and(|sep| self.next_if_kind(sep).is_none()) {
+                break;
+            }
+        }
+
+        let closing = self.expect(D::closing())?;
+        let span = opening.join(closing);
+
+        Ok((data, span))
+    }
+
+    fn expect_block(&mut self) -> ParseResult<Block<'a>> {
+        let (stmts, span) = self.expect_delimited(Compound, Self::parse_stmt)?;
+        Ok(Block {
+            stmts: stmts.into_boxed_slice(),
+            span,
+        })
+    }
+
+    fn parse_infix(&mut self, mut lhs: Expr<'a>, min: u8) -> ParseResult<Expr<'a>> {
         while let Some(op) = self
             .peek()
             .and_then(|tk| InfixOp::from_token(tk.kind))
@@ -108,7 +227,7 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn parse_prefix(&mut self) -> ParseResult<Expr> {
+    fn parse_prefix(&mut self) -> ParseResult<Expr<'a>> {
         match self.peek() {
             Some(Token {
                 kind: TokenKind::Minus,
@@ -123,15 +242,63 @@ impl<'a> Parser<'a> {
                 };
                 Ok(Expr::new(kind, span))
             }
-            _ => self.parse_primary(),
+            _ => self.parse_postfix(),
         }
     }
 
-    fn parse_primary(&mut self) -> ParseResult<Expr> {
-        let tk = self.next_or_err()?;
-        let span = tk.span;
+    fn parse_postfix(&mut self) -> ParseResult<Expr<'a>> {
+        let mut expr = self.parse_primary()?;
+        loop {
+            match self.peek() {
+                Some(Token {
+                    kind: TokenKind::LParen,
+                    span,
+                }) => {
+                    self.eat();
+                    let (args, span) = self.parse_delimited(Paren, span, Self::parse_expr)?;
+                    let span = expr.span.join(span);
+                    let kind = ExprKind::Call {
+                        callee: Box::new(expr),
+                        args:   args.into_boxed_slice(),
+                    };
+                    expr = Expr::new(kind, span);
+                }
+                _ => break,
+            }
+        }
+        Ok(expr)
+    }
 
-        match tk.kind {
+    fn parse_primary(&mut self) -> ParseResult<Expr<'a>> {
+        let Token { kind, span } = self.next()?;
+
+        match kind {
+            TokenKind::KwIf => {
+                let cond = self.parse_expr()?;
+                let then = self.expect_block()?;
+                self.expect(TokenKind::KwElse)?;
+                let els = self.expect_block()?;
+                let span = span.join(els.span);
+                let kind = ExprKind::If {
+                    cond: Box::new(cond),
+                    then,
+                    els,
+                };
+                Ok(Expr::new(kind, span))
+            }
+            TokenKind::LBrace => {
+                let (stmts, span) = self.parse_delimited(Compound, span, Self::parse_stmt)?;
+                let block = Block {
+                    stmts: stmts.into_boxed_slice(),
+                    span,
+                };
+                let kind = ExprKind::Block(block);
+                Ok(Expr::new(kind, span))
+            }
+            TokenKind::Ident(id) => {
+                let kind = ExprKind::Ident(id);
+                Ok(Expr::new(kind, span))
+            }
             TokenKind::Number(lit) => {
                 let kind = ExprKind::Number(lit.parse().unwrap());
                 Ok(Expr::new(kind, span))
@@ -144,5 +311,64 @@ impl<'a> Parser<'a> {
 
             _ => Err(ParseError::new(ParseErrorKind::InvalidExpr, span)),
         }
+    }
+}
+
+trait Delim {
+    fn opening() -> TokenKind<'static>;
+    fn closing() -> TokenKind<'static>;
+    fn separator() -> Option<TokenKind<'static>>;
+}
+
+struct Paren;
+struct Brace;
+struct Bracket;
+struct Compound;
+
+impl Delim for Paren {
+    fn opening() -> TokenKind<'static> {
+        TokenKind::LParen
+    }
+    fn closing() -> TokenKind<'static> {
+        TokenKind::RParen
+    }
+    fn separator() -> Option<TokenKind<'static>> {
+        Some(TokenKind::Comma)
+    }
+}
+
+impl Delim for Bracket {
+    fn opening() -> TokenKind<'static> {
+        TokenKind::LBracket
+    }
+    fn closing() -> TokenKind<'static> {
+        TokenKind::RBracket
+    }
+    fn separator() -> Option<TokenKind<'static>> {
+        Some(TokenKind::Comma)
+    }
+}
+
+impl Delim for Brace {
+    fn opening() -> TokenKind<'static> {
+        TokenKind::LBrace
+    }
+    fn closing() -> TokenKind<'static> {
+        TokenKind::RBrace
+    }
+    fn separator() -> Option<TokenKind<'static>> {
+        Some(TokenKind::Comma)
+    }
+}
+
+impl Delim for Compound {
+    fn opening() -> TokenKind<'static> {
+        TokenKind::LBrace
+    }
+    fn closing() -> TokenKind<'static> {
+        TokenKind::RBrace
+    }
+    fn separator() -> Option<TokenKind<'static>> {
+        None
     }
 }

@@ -109,6 +109,7 @@ impl Driver {
         match error {
             CompileError::Lex(spands) => self.report(&spands, &file),
             CompileError::Parse(spands) => self.report(&spands, &file),
+            CompileError::Codegen(err) => self.report(&[err], &file),
         }
     }
 
@@ -130,7 +131,7 @@ impl Driver {
         let expr = parser.parse_expr().map_err(|e| vec![e])?;
 
         let mut code = Codegen::new(0);
-        code.compile_expr(expr);
+        code.compile_expr(expr)?;
         Ok(code.finish())
     }
 

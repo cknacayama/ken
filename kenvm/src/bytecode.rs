@@ -19,11 +19,18 @@ pub enum Op {
 
     Call(u8),
 
+    AddLocal,
+
     Load(u16),
     Store(u16),
 
+    Restore(u16),
+
+    LoadGlobal(u16),
+    StoreGlobal(u16),
+
     Jmp(u16),
-    JmpIf(u16),
+    JmpUnless(u16),
 
     Ret,
 }
@@ -60,12 +67,23 @@ impl ChunkBuilder {
         }
     }
 
+    #[must_use]
+    pub fn redact_jmp(&mut self, i: u16, new: u16) -> Option<u16> {
+        let jmp = self.ops.get_mut(i as usize).and_then(|op| match op {
+            Op::Jmp(to) | Op::JmpUnless(to) => Some(to),
+            _ => None,
+        })?;
+        let old = *jmp;
+        *jmp = new;
+        Some(old)
+    }
+
     #[inline]
-    pub fn push_op(&mut self, op: Op, span: Span) -> u16 {
+    pub fn push_op(&mut self, op: Op, span: Span) -> Option<u16> {
         let cur = self.ops.len();
         self.ops.push(op);
         self.spans.push(span);
-        u16::try_from(cur).unwrap()
+        u16::try_from(cur).ok()
     }
 
     #[inline]
@@ -82,7 +100,7 @@ impl ChunkBuilder {
     }
 
     #[inline]
-    pub fn push_push(&mut self, value: Value, span: Span) -> u16 {
+    pub fn push_push(&mut self, value: Value, span: Span) -> Option<u16> {
         let i = self.push_value(value);
         self.push_op(Op::Push(i), span)
     }

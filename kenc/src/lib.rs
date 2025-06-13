@@ -1,3 +1,4 @@
+use crate::codegen::CodegenError;
 use crate::lexer::LexError;
 use crate::parser::ParseError;
 
@@ -11,6 +12,7 @@ pub mod token;
 pub enum CompileError {
     Lex(Vec<LexError>),
     Parse(Vec<ParseError>),
+    Codegen(CodegenError),
 }
 
 impl From<Vec<LexError>> for CompileError {
@@ -22,5 +24,11 @@ impl From<Vec<LexError>> for CompileError {
 impl From<Vec<ParseError>> for CompileError {
     fn from(value: Vec<ParseError>) -> Self {
         Self::Parse(value)
+    }
+}
+
+impl From<CodegenError> for CompileError {
+    fn from(value: CodegenError) -> Self {
+        Self::Codegen(value)
     }
 }

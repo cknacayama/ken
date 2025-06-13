@@ -66,8 +66,10 @@ impl<'a> Frame<'a> {
 }
 
 pub struct Vm {
-    debug: bool,
-    stack: Vec<Value>,
+    debug:   bool,
+    stack:   Vec<Value>,
+    local:   Vec<Value>,
+    globals: Vec<Value>,
 }
 
 impl Default for Vm {
@@ -80,8 +82,10 @@ impl Vm {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            debug: false,
-            stack: Vec::new(),
+            debug:   false,
+            stack:   Vec::new(),
+            local:   Vec::new(),
+            globals: Vec::new(),
         }
     }
 
@@ -94,25 +98,45 @@ impl Vm {
     }
 
     #[must_use]
+    const fn sp(&self) -> usize {
+        self.stack.len()
+    }
+
+    #[must_use]
     #[allow(
         clippy::cast_possible_truncation,
         reason = "stack size is never greater than u32::MAX"
     )]
-    const fn sp(&self) -> u32 {
-        self.stack.len() as u32
+    const fn lp(&self) -> u32 {
+        self.local.len() as u32
     }
 
-    fn restore_sp(&mut self, sp: u32) -> RuntimeResult<()> {
+    fn restore_local(&mut self, lp: u32) -> RuntimeResult<()> {
+        if lp > self.lp() {
+            return Err(RuntimeError::StackUnderflow);
+        }
+        let lp = lp as usize;
+        let _ = self.local.drain(lp..);
+        Ok(())
+    }
+
+    fn restore_stack(&mut self, sp: usize) -> RuntimeResult<()> {
         if sp > self.sp() {
             return Err(RuntimeError::StackUnderflow);
         }
-        let sp = sp as usize;
         let _ = self.stack.drain(sp..);
+        Ok(())
+    }
+
+    fn restore_all(&mut self, sp: usize, lp: u32) -> RuntimeResult<()> {
+        self.restore_stack(sp)?;
+        self.restore_local(lp)?;
         Ok(())
     }
 
     pub fn run<'a>(&mut self, function: &'a Function) -> FrameResult<(Value, Frame<'a>)> {
         let sp = self.sp();
+        let lp = self.lp();
 
         let mut frame = self.create_frame(function);
         let ret = loop {
@@ -124,7 +148,7 @@ impl Vm {
                 Ok(Status::Finished(ret)) => break ret,
                 Err(mut err) => {
                     let span = frame.fetch_span();
-                    let _ = self.restore_sp(sp);
+                    let _ = self.restore_all(sp, lp);
                     err.spans.push(span);
                     return Err(err);
                 }
@@ -139,8 +163,8 @@ impl Vm {
     }
 
     fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
-        let sp = self.sp();
-        let bp = sp - u32::from(function.arity());
+        let lp = self.lp();
+        let bp = lp - u32::from(function.arity());
         Frame::new(function, bp)
     }
 
@@ -148,40 +172,60 @@ impl Vm {
         self.stack.pop().ok_or(RuntimeError::StackUnderflow)
     }
 
-    fn push_stack(&mut self, value: Value) -> RuntimeResult<()> {
-        if self.stack.len() >= u32::MAX as usize {
-            Err(RuntimeError::StackOverflow)
-        } else {
-            self.stack.push(value);
-            Ok(())
+    fn push_stack(&mut self, value: Value) {
+        self.stack.push(value);
+    }
+
+    fn add_local(&mut self, value: Value) -> RuntimeResult<()> {
+        if self.local.len() >= u32::MAX as usize {
+            return Err(RuntimeError::StackOverflow);
         }
+        self.local.push(value);
+        Ok(())
     }
 
     fn store(&mut self, i: usize, value: Value) -> RuntimeResult<()> {
-        let local = self.stack.get_mut(i).ok_or(RuntimeError::StackUnderflow)?;
+        let local = self.local.get_mut(i).ok_or(RuntimeError::LocalNotFound)?;
         *local = value;
         Ok(())
     }
 
     fn load(&self, i: usize) -> RuntimeResult<Value> {
-        self.stack
+        self.local
             .get(i)
-            .ok_or(RuntimeError::StackUnderflow)
+            .ok_or(RuntimeError::LocalNotFound)
             .cloned()
     }
 
-    fn arg_slice(&self, count: u8) -> RuntimeResult<&[Value]> {
-        if self.sp() < u32::from(count) {
+    fn store_global(&mut self, i: usize, value: Value) -> RuntimeResult<()> {
+        let global = self
+            .globals
+            .get_mut(i)
+            .ok_or(RuntimeError::GlobalNotFound)?;
+        *global = value;
+        Ok(())
+    }
+
+    fn load_global(&self, i: usize) -> RuntimeResult<Value> {
+        self.globals
+            .get(i)
+            .ok_or(RuntimeError::GlobalNotFound)
+            .cloned()
+    }
+
+    fn grab_args(&mut self, count: u8) -> RuntimeResult<Vec<Value>> {
+        let count = usize::from(count);
+        if self.sp() < count {
             return Err(RuntimeError::StackUnderflow);
         }
-        let (_, args) = self.stack.split_at(self.stack.len() - count as usize);
+        let args = self.stack.drain(self.stack.len() - count..).collect();
         Ok(args)
     }
 
     fn prefix_op<T: Convert>(&mut self, f: impl FnOnce(T) -> T) -> RuntimeResult<()> {
         let value = self.pop_stack()?.try_into()?;
         let value = f(value);
-        self.push_stack(value.into())?;
+        self.push_stack(value.into());
         Ok(())
     }
 
@@ -189,7 +233,7 @@ impl Vm {
         let rhs = self.pop_stack()?.try_into()?;
         let lhs = self.pop_stack()?.try_into()?;
         let value = f(lhs, rhs);
-        self.push_stack(value.into())?;
+        self.push_stack(value.into());
         Ok(())
     }
 
@@ -200,7 +244,7 @@ impl Vm {
         let rhs = self.pop_stack()?.try_into()?;
         let lhs = self.pop_stack()?.try_into()?;
         let value = f(lhs, rhs)?;
-        self.push_stack(value.into())?;
+        self.push_stack(value.into());
         Ok(())
     }
 
@@ -216,7 +260,7 @@ impl Vm {
             }
             Op::Push(i) => {
                 let value = frame.fetch_value(i).ok_or(RuntimeError::NoValue)?;
-                self.push_stack(value)?;
+                self.push_stack(value);
             }
 
             Op::Add => self.infix_op::<f64>(|a, b| a + b)?,
@@ -235,28 +279,39 @@ impl Vm {
 
             Op::Call(count) => {
                 let value = self.pop_stack()?;
+                let args = self.grab_args(count)?;
                 if let Value::Builtin(f) = value {
-                    let args = self.arg_slice(count)?;
-                    let value = f(args)?;
-                    self.push_stack(value)?;
+                    let value = f(&args)?;
+                    self.push_stack(value);
                     return Ok(Status::Running);
                 }
 
                 let object = value.as_object()?;
                 let callee = object.try_borrow().map_err(|_| RuntimeError::BorrowError)?;
+
                 if let Obj::Function(function) = &*callee {
+                    if function.arity() != count {
+                        return Err(FrameError::from(RuntimeError::ArityError));
+                    }
+                    for arg in args {
+                        self.add_local(arg)?;
+                    }
                     let (ret, frame) = self.run(function)?;
-                    self.restore_sp(frame.bp())?;
-                    self.push_stack(ret)?;
+                    self.restore_local(frame.bp())?;
+                    self.push_stack(ret);
                 } else {
                     return Err(FrameError::from(RuntimeError::TypeError));
                 }
+            }
+            Op::AddLocal => {
+                let value = self.pop_stack()?;
+                self.add_local(value)?;
             }
             Op::Load(i) => {
                 let bp = frame.bp() as usize;
                 let i = bp + i as usize;
                 let value = self.load(i)?;
-                self.push_stack(value)?;
+                self.push_stack(value);
             }
             Op::Store(i) => {
                 let value = self.pop_stack()?;
@@ -264,12 +319,24 @@ impl Vm {
                 let i = bp + i as usize;
                 self.store(i, value)?;
             }
+            Op::Restore(count) => {
+                let lp = self.lp() - u32::from(count);
+                self.restore_local(lp)?;
+            }
+            Op::LoadGlobal(i) => {
+                let value = self.load_global(i as usize)?;
+                self.push_stack(value);
+            }
+            Op::StoreGlobal(i) => {
+                let value = self.pop_stack()?;
+                self.store_global(i as usize, value)?;
+            }
             Op::Jmp(ip) => {
                 frame.jump(ip);
             }
-            Op::JmpIf(ip) => {
-                let cond = self.pop_stack()?.try_into()?;
-                if cond {
+            Op::JmpUnless(ip) => {
+                let cond: bool = self.pop_stack()?.try_into()?;
+                if !cond {
                     frame.jump(ip);
                 }
             }
@@ -289,6 +356,8 @@ pub enum RuntimeError {
     DivisionByZero,
     #[error("type error")]
     TypeError,
+    #[error("arity error")]
+    ArityError,
     #[error("not enought arguments")]
     NotEnoughArgs,
     #[error("borrow error")]
@@ -297,6 +366,10 @@ pub enum RuntimeError {
     StackUnderflow,
     #[error("stack overflow")]
     StackOverflow,
+    #[error("local not found")]
+    LocalNotFound,
+    #[error("global not found")]
+    GlobalNotFound,
     #[error("no instruction to execute")]
     NoInstruction,
     #[error("no value")]

@@ -124,19 +124,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn ident(&mut self) -> Token<'a> {
-        fn try_kw(s: &str) -> TokenKind<'_> {
-            match s {
-                "fn" => TokenKind::KwFn,
-                "ret" => TokenKind::KwRet,
-                "if" => TokenKind::KwIf,
-                "else" => TokenKind::KwElse,
-                _ => TokenKind::Ident(s),
-            }
-        }
-
         self.eat_while(|c| c.is_ascii_alphanumeric() || c == '_');
         let s = self.view();
-        let kind = try_kw(s);
+        let kind = TokenKind::try_kw(s);
         let span = self.make_span();
         Token::new(kind, span)
     }
@@ -161,6 +151,10 @@ impl<'a> Lexer<'a> {
             ')' => token!(RParen),
             '{' => token!(LBrace),
             '}' => token!(RBrace),
+            '[' => token!(LBracket),
+            ']' => token!(RBracket),
+            ',' => token!(Comma),
+            ';' => token!(Semicolon),
             '+' => token!(Plus),
             '-' => token!(Minus),
             '*' => token!(Star),

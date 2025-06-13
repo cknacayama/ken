@@ -1,4 +1,4 @@
-use kenspan::Spand;
+use kenspan::{Span, Spand};
 
 use crate::token::TokenKind;
 
@@ -113,20 +113,69 @@ impl Operator for InfixOp {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ExprKind {
+#[derive(Debug)]
+pub struct Block<'a> {
+    pub stmts: Box<[Stmt<'a>]>,
+    pub span:  Span,
+}
+
+#[derive(Debug)]
+pub struct Fn<'a> {
+    pub name:   &'a str,
+    pub params: Box<[&'a str]>,
+    pub body:   Block<'a>,
+}
+
+#[derive(Debug)]
+pub enum ItemKind<'a> {
+    Fn(Fn<'a>),
+    Let(Local<'a>),
+}
+
+#[derive(Debug)]
+pub struct Local<'a> {
+    pub name: &'a str,
+    pub bind: Option<Expr<'a>>,
+}
+
+#[derive(Debug)]
+pub enum StmtKind<'a> {
+    Item(Item<'a>),
+    Expr(Expr<'a>),
+    Semi(Expr<'a>),
+    Empty,
+}
+
+#[derive(Debug)]
+pub enum ExprKind<'a> {
+    Ident(&'a str),
     Number(f64),
+
+    Block(Block<'a>),
+
+    If {
+        cond: Box<Expr<'a>>,
+        then: Block<'a>,
+        els:  Block<'a>,
+    },
+
+    Call {
+        callee: Box<Expr<'a>>,
+        args:   Box<[Expr<'a>]>,
+    },
 
     Prefix {
         op:   PrefixOp,
-        expr: Box<Expr>,
+        expr: Box<Expr<'a>>,
     },
 
     Infix {
         op:  InfixOp,
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
+        lhs: Box<Expr<'a>>,
+        rhs: Box<Expr<'a>>,
     },
 }
 
-pub type Expr = Spand<ExprKind>;
+pub type Expr<'a> = Spand<ExprKind<'a>>;
+pub type Stmt<'a> = Spand<StmtKind<'a>>;
+pub type Item<'a> = Spand<ItemKind<'a>>;
