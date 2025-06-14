@@ -16,10 +16,6 @@ pub enum CodegenErrorKind {
     UndefinedVariable,
     #[error("too many arguments")]
     TooManyArgs,
-    #[error("too many variables")]
-    TooManyVariables,
-    #[error("too many instructions")]
-    TooManyInstructions,
     #[error("not jmp")]
     NotJmp,
     #[error("scope error")]
@@ -30,9 +26,9 @@ pub type CodegenError = Spand<CodegenErrorKind>;
 pub type CodegenResult<T> = Result<T, CodegenError>;
 
 pub struct Codegen<'a> {
-    globals: HashMap<&'a str, u16>,
-    scope:   Vec<HashMap<&'a str, u16>>,
-    locals:  u16,
+    globals: HashMap<&'a str, usize>,
+    scope:   Vec<HashMap<&'a str, usize>>,
+    locals:  usize,
     arity:   u8,
     stack:   usize,
     chunk:   ChunkBuilder,
@@ -40,20 +36,20 @@ pub struct Codegen<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct GenSpan {
-    start: u16,
-    end:   u16,
+    start: usize,
+    end:   usize,
 }
 
 impl GenSpan {
-    const fn new(start: u16, end: u16) -> Self {
+    const fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
 
-    const fn single(op: u16) -> Self {
+    const fn single(op: usize) -> Self {
         Self::new(op, op)
     }
 
-    const fn with_end(self, end: u16) -> Self {
+    const fn with_end(self, end: usize) -> Self {
         Self { end, ..self }
     }
 
@@ -79,18 +75,16 @@ impl<'a> Codegen<'a> {
         self.stack == 0
     }
 
-    fn begin_scope(&mut self) {
+    fn begin_scope(&mut self) -> usize {
         self.scope.push(HashMap::default());
+        self.stack
     }
 
-    fn end_scope(&mut self) -> Option<HashMap<&'a str, u16>> {
+    fn end_scope(&mut self) -> Option<HashMap<&'a str, usize>> {
         self.scope.pop()
     }
 
     fn add_local(&mut self, name: &'a str, span: Span) -> CodegenResult<()> {
-        if self.locals == u16::MAX {
-            return Err(CodegenError::new(CodegenErrorKind::TooManyVariables, span));
-        }
         let pos = self.locals;
         self.locals += 1;
         self.scope
@@ -100,33 +94,35 @@ impl<'a> Codegen<'a> {
         Ok(())
     }
 
-    fn get_global(&self, name: &'a str) -> Option<u16> {
+    fn get_global(&self, name: &'a str) -> Option<usize> {
         self.globals.get(name).copied()
     }
 
-    fn get_local(&self, name: &'a str) -> Option<u16> {
+    fn get_local(&self, name: &'a str) -> Option<usize> {
         self.scope
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).copied())
     }
 
-    fn redact_jmp(&mut self, i: u16, new: u16, span: Span) -> CodegenResult<u16> {
+    fn redact_jmp(&mut self, i: usize, new: usize, span: Span) -> CodegenResult<usize> {
         self.chunk
             .redact_jmp(i, new)
             .ok_or_else(|| CodegenError::new(CodegenErrorKind::NotJmp, span))
     }
 
-    fn push_op(&mut self, op: Op, span: Span) -> CodegenResult<u16> {
-        self.chunk
-            .push_op(op, span)
-            .ok_or_else(|| CodegenError::new(CodegenErrorKind::TooManyInstructions, span))
+    fn push_op(&mut self, op: Op, span: Span) -> usize {
+        self.chunk.push_op(op, span)
     }
 
-    fn push_push(&mut self, value: Value, span: Span) -> CodegenResult<u16> {
-        self.chunk
-            .push_push(value, span)
-            .ok_or_else(|| CodegenError::new(CodegenErrorKind::TooManyInstructions, span))
+    fn push_push(&mut self, value: Value, span: Span) -> usize {
+        self.chunk.push_push(value, span)
+    }
+
+    fn push_unit(&mut self, span: Span) -> GenSpan {
+        let op = self.push_push(Value::Unit, span);
+        self.stack += 1;
+        GenSpan::single(op)
     }
 
     #[must_use]
@@ -136,16 +132,37 @@ impl<'a> Codegen<'a> {
         Function::new(self.arity, chunk)
     }
 
+    fn compile_many<T>(
+        &mut self,
+        ast: impl IntoIterator<Item = T>,
+        compile: impl std::ops::Fn(&mut Self, T) -> CodegenResult<GenSpan>,
+    ) -> CodegenResult<Option<GenSpan>> {
+        let mut span: Option<GenSpan> = None;
+        for ast in ast {
+            let ast = compile(self, ast)?;
+            if let Some(ref mut span) = span {
+                *span = span.join(ast);
+            } else {
+                span = Some(ast);
+            }
+        }
+        Ok(span)
+    }
+
     pub fn compile_stmt(&mut self, Spand { kind, span }: Stmt<'a>) -> CodegenResult<GenSpan> {
         match kind {
             StmtKind::Item(item) => self.compile_item(item),
             StmtKind::Expr(expr) => self.compile_expr(expr),
             StmtKind::Semi(expr) => {
                 let expr = self.compile_expr(expr)?;
-                let end = self.push_op(Op::Pop, span)?;
+                let end = self.push_op(Op::Pop, span);
+                self.stack -= 1;
                 Ok(expr.with_end(end))
             }
-            StmtKind::Empty => self.push_op(Op::Nop, span).map(GenSpan::single),
+            StmtKind::Empty => {
+                let op = self.push_op(Op::Nop, span);
+                Ok(GenSpan::single(op))
+            }
         }
     }
 
@@ -164,11 +181,12 @@ impl<'a> Codegen<'a> {
         let bind = if let Some(bind) = local.bind {
             self.compile_expr(bind)?
         } else {
-            self.push_push(Value::Unit, span).map(GenSpan::single)?
+            self.push_unit(span)
         };
 
         self.add_local(local.name, span)?;
-        let end = self.push_op(Op::AddLocal, span)?;
+        let end = self.push_op(Op::AddLocal, span);
+        self.stack -= 1;
 
         Ok(bind.with_end(end))
     }
@@ -176,7 +194,7 @@ impl<'a> Codegen<'a> {
     pub fn compile_expr(&mut self, Expr { kind, span }: Expr<'a>) -> CodegenResult<GenSpan> {
         match kind {
             ExprKind::Ident(id) => self.compile_ident_expr(id, span),
-            ExprKind::Number(n) => self.compile_number_expr(n, span),
+            ExprKind::Number(n) => Ok(self.compile_number_expr(n, span)),
             ExprKind::Prefix { op, expr } => self.compile_prefix_expr(op, *expr, span),
             ExprKind::Infix { op, lhs, rhs } => self.compile_infix_expr(op, *lhs, *rhs, span),
             ExprKind::Block(block) => self.compile_block(block),
@@ -193,16 +211,15 @@ impl<'a> Codegen<'a> {
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let cond = self.compile_expr(cond)?;
-        let jmp = self.push_op(Op::JmpUnless(0), span)?;
+        let jmp = self.push_op(Op::JmpUnless(0), span);
+        self.stack -= 1;
 
         self.compile_block(then)?;
-        let jmp_end = self.push_op(Op::Jmp(0), span)?;
+        let jmp_end = self.push_op(Op::Jmp(0), span);
+        self.stack -= 1;
 
         let els = self.compile_block(els)?;
-        let end = els
-            .end
-            .checked_add(1)
-            .ok_or_else(|| CodegenError::new(CodegenErrorKind::TooManyInstructions, span))?;
+        let end = els.end + 1;
 
         self.redact_jmp(jmp, els.start, span)?;
         self.redact_jmp(jmp_end, end, span)?;
@@ -217,28 +234,35 @@ impl<'a> Codegen<'a> {
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let count = u8::try_from(args.len())
-            .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyVariables, span))?;
-        let args = args
-            .into_iter()
-            .map(|arg| self.compile_expr(arg))
-            .reduce(|acc, x| acc.and_then(|acc| x.map(|x| acc.join(x))))
-            .transpose()?;
+            .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
+        let args = self.compile_many(args, Self::compile_expr)?;
 
         let callee = self.compile_expr(callee)?;
-        let end = self.push_op(Op::Call(count), span)?;
+        let end = self.push_op(Op::Call(count), span);
+        self.stack -= count as usize;
 
         let span = args.map_or_else(|| callee.with_end(end), |args| args.with_end(end));
         Ok(span)
     }
 
     fn compile_block(&mut self, Block { stmts, span }: Block<'a>) -> CodegenResult<GenSpan> {
-        todo!()
+        let stack = self.begin_scope();
+        let mut stmts = self.compile_many(stmts, Self::compile_stmt)?;
+        if self.stack == stack {
+            let unit = self.push_unit(span);
+            stmts = Some(stmts.unwrap_or(unit));
+        }
+        let scope = self.end_scope().unwrap();
+        let locals = scope.len();
+        let end = self.push_op(Op::Restore(locals), span);
+        let span = stmts.map_or_else(|| GenSpan::single(end), |span| span.with_end(end));
+        Ok(span)
     }
 
-    fn compile_number_expr(&mut self, n: f64, span: Span) -> CodegenResult<GenSpan> {
-        let op = self.push_push(Value::Number(n), span)?;
+    fn compile_number_expr(&mut self, n: f64, span: Span) -> GenSpan {
+        let op = self.push_push(Value::Number(n), span);
         self.stack += 1;
-        Ok(GenSpan::single(op))
+        GenSpan::single(op)
     }
 
     fn compile_ident_expr(&mut self, name: &str, span: Span) -> CodegenResult<GenSpan> {
@@ -250,7 +274,7 @@ impl<'a> Codegen<'a> {
                 .ok_or_else(|| CodegenError::new(CodegenErrorKind::UndefinedVariable, span))?;
             Op::LoadGlobal(global)
         };
-        let op = self.push_op(op, span)?;
+        let op = self.push_op(op, span);
         self.stack += 1;
         Ok(GenSpan::single(op))
     }
@@ -263,7 +287,7 @@ impl<'a> Codegen<'a> {
     ) -> CodegenResult<GenSpan> {
         let start = self.compile_expr(expr)?;
         let end = match op {
-            PrefixOp::Neg => self.push_op(Op::Neg, span)?,
+            PrefixOp::Neg => self.push_op(Op::Neg, span),
         };
         Ok(start.with_end(end))
     }
@@ -276,16 +300,16 @@ impl<'a> Codegen<'a> {
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let start = self.compile_expr(lhs)?;
-        self.compile_expr(rhs)?;
+        let _ = self.compile_expr(rhs)?;
         let end = match op {
-            InfixOp::Add => self.push_op(Op::Add, span)?,
-            InfixOp::Sub => self.push_op(Op::Sub, span)?,
-            InfixOp::Mul => self.push_op(Op::Mul, span)?,
-            InfixOp::Div => self.push_op(Op::Div, span)?,
+            InfixOp::Add => self.push_op(Op::Add, span),
+            InfixOp::Sub => self.push_op(Op::Sub, span),
+            InfixOp::Mul => self.push_op(Op::Mul, span),
+            InfixOp::Div => self.push_op(Op::Div, span),
             InfixOp::Pow => {
                 let pow = Value::Builtin(Builtin::pow());
-                self.push_push(pow, span)?;
-                self.push_op(Op::Call(2), span)?
+                self.push_push(pow, span);
+                self.push_op(Op::Call(2), span)
             }
         };
         self.stack -= 1;
@@ -294,8 +318,8 @@ impl<'a> Codegen<'a> {
 
     fn push_ret(&mut self) {
         if self.stack_is_empty() {
-            self.chunk.push_push(Value::Unit, Span::default());
+            self.push_unit(Span::default());
         }
-        self.chunk.push_op(Op::Ret, Span::default());
+        self.push_op(Op::Ret, Span::default());
     }
 }

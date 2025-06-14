@@ -154,8 +154,8 @@ impl Driver {
                 }
             };
 
-            match vm.run(&function) {
-                Ok((ret, _)) => println!("{ret}"),
+            match vm.eval(&function) {
+                Ok(ret) => println!("{ret}"),
                 Err(err) => {
                     self.report_runtime_error("<stdin>", input, &err);
                 }

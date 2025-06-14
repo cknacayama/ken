@@ -5,33 +5,26 @@ pub mod value;
 
 use kenspan::Span;
 
-use crate::bytecode::Op;
+use crate::bytecode::{Op, OpCode};
 use crate::obj::{Function, Obj};
 use crate::value::{Convert, Value};
 
 #[derive(Debug, Clone)]
-pub enum Status {
+enum Status {
     Running,
     Finished(Value),
 }
 
-impl Status {
-    #[must_use]
-    pub const fn is_running(&self) -> bool {
-        matches!(self, Self::Running)
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
-pub struct Frame<'a> {
+struct Frame<'a> {
     function: &'a Function,
-    ip:       u16,
-    bp:       u32,
+    ip:       usize,
+    bp:       usize,
 }
 
 impl<'a> Frame<'a> {
     #[must_use]
-    pub const fn new(function: &'a Function, bp: u32) -> Self {
+    const fn new(function: &'a Function, bp: usize) -> Self {
         Self {
             function,
             bp,
@@ -40,27 +33,90 @@ impl<'a> Frame<'a> {
     }
 
     #[must_use]
-    pub fn fetch_span(&self) -> Span {
+    fn fetch_span(&self) -> Span {
         self.function.chunk().fetch_span(self.ip - 1)
     }
 
-    pub fn fetch(&mut self) -> Option<Op> {
-        let op = self.function.chunk().fetch(self.ip);
+    #[must_use]
+    fn fetch_u8(&mut self) -> Option<u8> {
+        let byte = self.function.chunk().fetch_u8(self.ip)?;
         self.ip += 1;
-        op
+        Some(byte)
     }
 
     #[must_use]
-    pub fn fetch_value(&self, i: u16) -> Option<Value> {
+    fn fetch_usize(&mut self) -> Option<usize> {
+        let word = self.function.chunk().fetch_usize(self.ip)?;
+        self.ip += 8;
+        Some(word)
+    }
+
+    fn fetch(&mut self) -> Option<Op> {
+        let code = self.fetch_u8().and_then(OpCode::decode)?;
+
+        let op = match code {
+            OpCode::Nop => Op::Nop,
+            OpCode::Pop => Op::Pop,
+            OpCode::Push => {
+                let arg = self.fetch_usize()?;
+                Op::Push(arg)
+            }
+            OpCode::Neg => Op::Neg,
+            OpCode::Not => Op::Not,
+            OpCode::Add => Op::Add,
+            OpCode::Sub => Op::Sub,
+            OpCode::Mul => Op::Mul,
+            OpCode::Div => Op::Div,
+            OpCode::Call => {
+                let arg = self.fetch_u8()?;
+                Op::Call(arg)
+            }
+            OpCode::AddLocal => Op::AddLocal,
+            OpCode::Load => {
+                let arg = self.fetch_usize()?;
+                Op::Load(arg)
+            }
+            OpCode::Store => {
+                let arg = self.fetch_usize()?;
+                Op::Load(arg)
+            }
+            OpCode::Restore => {
+                let arg = self.fetch_usize()?;
+                Op::Restore(arg)
+            }
+            OpCode::LoadGlobal => {
+                let arg = self.fetch_usize()?;
+                Op::LoadGlobal(arg)
+            }
+            OpCode::StoreGlobal => {
+                let arg = self.fetch_usize()?;
+                Op::StoreGlobal(arg)
+            }
+            OpCode::Jmp => {
+                let arg = self.fetch_usize()?;
+                Op::Jmp(arg)
+            }
+            OpCode::JmpUnless => {
+                let arg = self.fetch_usize()?;
+                Op::JmpUnless(arg)
+            }
+            OpCode::Ret => Op::Ret,
+        };
+
+        Some(op)
+    }
+
+    #[must_use]
+    fn fetch_value(&self, i: usize) -> Option<Value> {
         self.function.chunk().fetch_value(i)
     }
 
-    pub const fn jump(&mut self, i: u16) {
+    const fn jump(&mut self, i: usize) {
         self.ip = i;
     }
 
     #[must_use]
-    pub const fn bp(&self) -> u32 {
+    const fn bp(&self) -> usize {
         self.bp
     }
 }
@@ -103,19 +159,15 @@ impl Vm {
     }
 
     #[must_use]
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "stack size is never greater than u32::MAX"
-    )]
-    const fn lp(&self) -> u32 {
-        self.local.len() as u32
+    const fn lp(&self) -> usize {
+        self.local.len()
     }
 
-    fn restore_local(&mut self, lp: u32) -> RuntimeResult<()> {
+    fn restore_local(&mut self, lp: usize) -> RuntimeResult<()> {
         if lp > self.lp() {
             return Err(RuntimeError::StackUnderflow);
         }
-        let lp = lp as usize;
+        let lp = lp;
         let _ = self.local.drain(lp..);
         Ok(())
     }
@@ -128,13 +180,18 @@ impl Vm {
         Ok(())
     }
 
-    fn restore_all(&mut self, sp: usize, lp: u32) -> RuntimeResult<()> {
+    fn restore_all(&mut self, sp: usize, lp: usize) -> RuntimeResult<()> {
         self.restore_stack(sp)?;
         self.restore_local(lp)?;
         Ok(())
     }
 
-    pub fn run<'a>(&mut self, function: &'a Function) -> FrameResult<(Value, Frame<'a>)> {
+    pub fn eval(&mut self, function: &Function) -> FrameResult<Value> {
+        let (value, _) = self.run(function)?;
+        Ok(value)
+    }
+
+    fn run<'a>(&mut self, function: &'a Function) -> FrameResult<(Value, Frame<'a>)> {
         let sp = self.sp();
         let lp = self.lp();
 
@@ -164,7 +221,7 @@ impl Vm {
 
     fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
         let lp = self.lp();
-        let bp = lp - u32::from(function.arity());
+        let bp = lp - usize::from(function.arity());
         Frame::new(function, bp)
     }
 
@@ -176,12 +233,8 @@ impl Vm {
         self.stack.push(value);
     }
 
-    fn add_local(&mut self, value: Value) -> RuntimeResult<()> {
-        if self.local.len() >= u32::MAX as usize {
-            return Err(RuntimeError::StackOverflow);
-        }
+    fn add_local(&mut self, value: Value) {
         self.local.push(value);
-        Ok(())
     }
 
     fn store(&mut self, i: usize, value: Value) -> RuntimeResult<()> {
@@ -258,8 +311,8 @@ impl Vm {
             Op::Pop => {
                 self.pop_stack()?;
             }
-            Op::Push(i) => {
-                let value = frame.fetch_value(i).ok_or(RuntimeError::NoValue)?;
+            Op::Push(at) => {
+                let value = frame.fetch_value(at).ok_or(RuntimeError::NoValue)?;
                 self.push_stack(value);
             }
 
@@ -294,7 +347,7 @@ impl Vm {
                         return Err(FrameError::from(RuntimeError::ArityError));
                     }
                     for arg in args {
-                        self.add_local(arg)?;
+                        self.add_local(arg);
                     }
                     let (ret, frame) = self.run(function)?;
                     self.restore_local(frame.bp())?;
@@ -305,31 +358,27 @@ impl Vm {
             }
             Op::AddLocal => {
                 let value = self.pop_stack()?;
-                self.add_local(value)?;
+                self.add_local(value);
             }
-            Op::Load(i) => {
-                let bp = frame.bp() as usize;
-                let i = bp + i as usize;
-                let value = self.load(i)?;
+            Op::Load(at) => {
+                let value = self.load(frame.bp() + at)?;
                 self.push_stack(value);
             }
-            Op::Store(i) => {
+            Op::Store(at) => {
                 let value = self.pop_stack()?;
-                let bp = frame.bp() as usize;
-                let i = bp + i as usize;
-                self.store(i, value)?;
+                self.store(frame.bp() + at, value)?;
             }
             Op::Restore(count) => {
-                let lp = self.lp() - u32::from(count);
+                let lp = self.lp() - count;
                 self.restore_local(lp)?;
             }
-            Op::LoadGlobal(i) => {
-                let value = self.load_global(i as usize)?;
+            Op::LoadGlobal(at) => {
+                let value = self.load_global(at)?;
                 self.push_stack(value);
             }
-            Op::StoreGlobal(i) => {
+            Op::StoreGlobal(at) => {
                 let value = self.pop_stack()?;
-                self.store_global(i as usize, value)?;
+                self.store_global(at, value)?;
             }
             Op::Jmp(ip) => {
                 frame.jump(ip);
@@ -364,8 +413,6 @@ pub enum RuntimeError {
     BorrowError,
     #[error("stack underflow")]
     StackUnderflow,
-    #[error("stack overflow")]
-    StackOverflow,
     #[error("local not found")]
     LocalNotFound,
     #[error("global not found")]
