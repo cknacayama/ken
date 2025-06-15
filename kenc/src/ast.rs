@@ -75,6 +75,13 @@ pub enum InfixOp {
     Mul,
     Div,
     Pow,
+
+    Eq,
+    Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
 }
 
 impl Operator for PrefixOp {
@@ -95,6 +102,7 @@ impl Operator for PrefixOp {
 impl Operator for InfixOp {
     fn as_operator(self) -> (u8, Fixity) {
         match self {
+            Self::Eq | Self::Ne | Self::Gt | Self::Ge | Self::Lt | Self::Le => (2, Fixity::Infix),
             Self::Add | Self::Sub => (3, Fixity::InfixLeft),
             Self::Mul | Self::Div => (4, Fixity::InfixLeft),
             Self::Pow => (5, Fixity::InfixRight),
@@ -108,6 +116,12 @@ impl Operator for InfixOp {
             TokenKind::Star => Some(Self::Mul),
             TokenKind::Slash => Some(Self::Div),
             TokenKind::Caret => Some(Self::Pow),
+            TokenKind::EqEq => Some(Self::Eq),
+            TokenKind::BangEq => Some(Self::Ne),
+            TokenKind::Greater => Some(Self::Gt),
+            TokenKind::GreaterEq => Some(Self::Ge),
+            TokenKind::Less => Some(Self::Lt),
+            TokenKind::LessEq => Some(Self::Le),
             _ => None,
         }
     }
@@ -149,7 +163,8 @@ pub enum StmtKind<'a> {
 #[derive(Debug)]
 pub enum ExprKind<'a> {
     Ident(&'a str),
-    Number(f64),
+    Float(f64),
+    Integer(i64),
 
     Block(Block<'a>),
 

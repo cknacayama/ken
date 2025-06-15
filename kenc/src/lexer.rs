@@ -112,15 +112,17 @@ impl<'a> Lexer<'a> {
     fn number(&mut self) -> Token<'a> {
         self.eat_while(|c| c.is_ascii_digit());
 
-        if self.first() == '.' && self.second().is_ascii_digit() {
+        let kind = if self.first() == '.' && self.second().is_ascii_digit() {
             self.bump();
             self.bump();
             self.eat_while(|c| c.is_ascii_digit());
-        }
+            TokenKind::Float
+        } else {
+            TokenKind::Integer
+        };
 
         let s = self.view();
-
-        Token::new(TokenKind::Number(s), self.make_span())
+        Token::new(kind(s), self.make_span())
     }
 
     fn ident(&mut self) -> Token<'a> {
@@ -138,6 +140,14 @@ impl<'a> Lexer<'a> {
             };
             ($e:expr) => {
                 Some(Ok($e))
+            };
+            ($tk:ident, $cont:expr => $cont_tk:ident) => {
+                if self.first() == $cont {
+                    self.bump();
+                    token!($cont_tk)
+                } else {
+                    token!($tk)
+                }
             };
         }
 
@@ -160,6 +170,12 @@ impl<'a> Lexer<'a> {
             '*' => token!(Star),
             '/' => token!(Slash),
             '^' => token!(Caret),
+
+            '=' => token!(Eq, '=' => EqEq),
+            '!' => token!(Bang, '=' => BangEq),
+            '>' => token!(Greater, '=' => GreaterEq),
+            '<' => token!(Less, '=' => LessEq),
+
             '0'..='9' => token!(self.number()),
             'a'..='z' | 'A'..='Z' | '_' => token!(self.ident()),
 

@@ -1,15 +1,47 @@
 use std::error::Error;
 
 use codespan_reporting::diagnostic::{Diagnostic, Label};
+use codespan_reporting::files::Files;
+use codespan_reporting::term;
+use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use kenspan::Spand;
 use kenvm::FrameError;
 
 pub trait Report {
-    fn report(&self) -> Diagnostic<()>;
+    fn diagnose(&self) -> Diagnostic<()>;
+
+    fn report<'a, F>(&self, file: &'a F)
+    where
+        F: Files<'a, FileId = ()>,
+    {
+        let writer = StandardStream::stderr(ColorChoice::Always);
+        let config = codespan_reporting::term::Config::default();
+
+        let report = self.diagnose();
+        let mut writer = writer.lock();
+        let _ = term::emit(&mut writer, &config, file, &report);
+    }
+}
+
+pub struct SimpleReport {
+    message: String,
+}
+
+impl SimpleReport {
+    #[must_use]
+    pub const fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+
+impl Report for SimpleReport {
+    fn diagnose(&self) -> Diagnostic<()> {
+        Diagnostic::error().with_message(&self.message)
+    }
 }
 
 impl<T: Error> Report for Spand<T> {
-    fn report(&self) -> Diagnostic<()> {
+    fn diagnose(&self) -> Diagnostic<()> {
         Diagnostic::error()
             .with_message(self.kind())
             .with_label(Label::primary((), self.span))
@@ -17,7 +49,7 @@ impl<T: Error> Report for Spand<T> {
 }
 
 impl Report for FrameError {
-    fn report(&self) -> Diagnostic<()> {
+    fn diagnose(&self) -> Diagnostic<()> {
         let mut spans = self.spans().iter().copied();
         Diagnostic::error()
             .with_message(self.runtime())

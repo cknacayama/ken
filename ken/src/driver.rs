@@ -1,23 +1,21 @@
 use std::fmt::Write;
 use std::io::Read;
 
-use codespan_reporting::diagnostic::Diagnostic;
 use codespan_reporting::files::{Files, SimpleFile};
-use codespan_reporting::term;
-use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use kenc::CompileError;
-use kenc::codegen::Codegen;
+use kenc::codegen::{Codegen, GlobalMap};
 use kenc::lexer::Lexer;
 use kenc::parser::Parser;
+use kenvm::Vm;
 use kenvm::obj::Function;
-use kenvm::{FrameError, Vm};
 
 use crate::cli::Cli;
 use crate::editor::{Editor, EditorRead};
-use crate::report::Report;
+use crate::report::{Report, SimpleReport};
 
 pub struct Driver {
-    file:       Option<SimpleFile<String, String>>,
+    file:       SimpleFile<String, String>,
+    repl:       bool,
     max_errors: usize,
     quiet:      bool,
 }
@@ -44,26 +42,51 @@ impl Driver {
 
     #[must_use]
     fn from_config(cfg: Cli) -> Self {
-        let file = if cfg.stdin {
-            Some(SimpleFile::new("<stdin>".to_string(), Self::read_stdin()))
+        let (file, repl) = if cfg.stdin {
+            (
+                SimpleFile::new("<stdin>".to_string(), Self::read_stdin()),
+                false,
+            )
         } else {
-            cfg.file.map(|path| {
-                let source = std::fs::read_to_string(&path).expect("Should be valid file path");
-                SimpleFile::new(path, source)
-            })
+            cfg.file.map_or_else(
+                || (SimpleFile::new("<stdin>".to_string(), String::new()), true),
+                |path| {
+                    let source = std::fs::read_to_string(&path).expect("Should be valid file path");
+                    (SimpleFile::new(path, source), false)
+                },
+            )
         };
         Self {
             file,
+            repl,
             quiet: cfg.quiet,
             max_errors: cfg.max_errors,
         }
     }
 
     pub fn run(self) {
-        if let Some(_file) = self.file {
-            todo!()
-        } else {
+        if self.repl {
             let _ = self.repl();
+        } else {
+            self.file();
+        }
+    }
+
+    fn file(&self) {
+        let function = match self.compile(self.file.source()) {
+            Ok(f) => f,
+            Err(err) => {
+                self.report_compile_error(&self.file, err);
+                return;
+            }
+        };
+        let mut vm = Vm::new();
+
+        match vm.eval(&function) {
+            Ok(_) => {}
+            Err(err) => {
+                err.report(&self.file);
+            }
         }
     }
 
@@ -75,22 +98,13 @@ impl Driver {
         if self.quiet {
             return;
         }
-        let writer = StandardStream::stderr(ColorChoice::Always);
-        let config = codespan_reporting::term::Config::default();
         let mut displayed = 0;
-        {
-            let mut writer = writer.lock();
-            for e in errors.iter().take(self.max_errors) {
-                let report = e.report();
-                let _ = term::emit(&mut writer, &config, files, &report);
-                displayed += 1;
-            }
+        for e in errors.iter().take(self.max_errors) {
+            e.report(files);
+            displayed += 1;
         }
 
-        let mut message = self.file.as_ref().map_or_else(
-            || "could not compile".to_string(),
-            |file| format!("could not compile {}", file.name()),
-        );
+        let mut message = format!("could not compile {}", self.file.name());
 
         let _ = message.write_fmt(format_args!(
             " due to {} previous {} ({} emitted)",
@@ -99,28 +113,16 @@ impl Driver {
             displayed
         ));
 
-        let error = Diagnostic::error().with_message(message);
-
-        let _ = term::emit(&mut writer.lock(), &config, files, &error);
+        let error = SimpleReport::new(message);
+        error.report(files);
     }
 
-    fn report_compile_error(&self, name: &str, source: String, error: CompileError) {
-        let file = SimpleFile::new(name, source);
+    fn report_compile_error(&self, file: &SimpleFile<String, String>, error: CompileError) {
         match error {
-            CompileError::Lex(spands) => self.report(&spands, &file),
-            CompileError::Parse(spands) => self.report(&spands, &file),
-            CompileError::Codegen(err) => self.report(&[err], &file),
+            CompileError::Lex(spands) => self.report(&spands, file),
+            CompileError::Parse(spands) => self.report(&spands, file),
+            CompileError::Codegen(err) => self.report(&[err], file),
         }
-    }
-
-    fn report_runtime_error(&self, name: &str, source: String, error: &FrameError) {
-        let writer = StandardStream::stderr(ColorChoice::Always);
-        let config = codespan_reporting::term::Config::default();
-
-        let report = error.report();
-        let file = SimpleFile::new(name, source);
-        let mut writer = writer.lock();
-        let _ = term::emit(&mut writer, &config, &file, &report);
     }
 
     fn compile(&self, input: &str) -> Result<Function, CompileError> {
@@ -128,10 +130,13 @@ impl Driver {
         let tokens = lexer.lex_all()?;
 
         let mut parser = Parser::new(tokens);
-        let expr = parser.parse_expr().map_err(|e| vec![e])?;
+        let ast = parser.parse_all()?;
 
-        let mut code = Codegen::new(0);
-        code.compile_expr(expr)?;
+        let mut global = GlobalMap::default();
+        let mut code = Codegen::new("", 0, &mut global);
+        for stmt in ast {
+            code.compile_stmt(stmt)?;
+        }
         Ok(code.finish())
     }
 
@@ -149,7 +154,8 @@ impl Driver {
             let function = match self.compile(&input) {
                 Ok(f) => f,
                 Err(err) => {
-                    self.report_compile_error("<stdin>", input, err);
+                    let file = SimpleFile::new("<stdin>".to_string(), input);
+                    self.report_compile_error(&file, err);
                     continue;
                 }
             };
@@ -157,7 +163,8 @@ impl Driver {
             match vm.eval(&function) {
                 Ok(ret) => println!("{ret}"),
                 Err(err) => {
-                    self.report_runtime_error("<stdin>", input, &err);
+                    let file = SimpleFile::new("<stdin>".to_string(), input);
+                    err.report(&file);
                 }
             }
         }

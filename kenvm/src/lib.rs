@@ -5,9 +5,10 @@ pub mod value;
 
 use kenspan::Span;
 
-use crate::bytecode::{Op, OpCode};
+use crate::builtin::Builtin;
+use crate::bytecode::{Chunk, Op, OpStream};
 use crate::obj::{Function, Obj};
-use crate::value::{Convert, Value};
+use crate::value::{Value, try_le, try_lt};
 
 #[derive(Debug, Clone)]
 enum Status {
@@ -17,102 +18,26 @@ enum Status {
 
 #[derive(Debug, Clone, Copy)]
 struct Frame<'a> {
-    function: &'a Function,
-    ip:       usize,
-    bp:       usize,
+    stream: OpStream<'a>,
+    bp:     usize,
 }
 
 impl<'a> Frame<'a> {
     #[must_use]
-    const fn new(function: &'a Function, bp: usize) -> Self {
+    const fn new(chunk: &'a Chunk, bp: usize) -> Self {
         Self {
-            function,
+            stream: OpStream::new(chunk),
             bp,
-            ip: 0,
         }
     }
 
     #[must_use]
-    fn fetch_span(&self) -> Span {
-        self.function.chunk().fetch_span(self.ip - 1)
+    fn fetch_value(&self, at: usize) -> Option<Value> {
+        self.stream.fetch_value(at)
     }
 
-    #[must_use]
-    fn fetch_u8(&mut self) -> Option<u8> {
-        let byte = self.function.chunk().fetch_u8(self.ip)?;
-        self.ip += 1;
-        Some(byte)
-    }
-
-    #[must_use]
-    fn fetch_usize(&mut self) -> Option<usize> {
-        let word = self.function.chunk().fetch_usize(self.ip)?;
-        self.ip += 8;
-        Some(word)
-    }
-
-    fn fetch(&mut self) -> Option<Op> {
-        let code = self.fetch_u8().and_then(OpCode::decode)?;
-
-        let op = match code {
-            OpCode::Nop => Op::Nop,
-            OpCode::Pop => Op::Pop,
-            OpCode::Push => {
-                let arg = self.fetch_usize()?;
-                Op::Push(arg)
-            }
-            OpCode::Neg => Op::Neg,
-            OpCode::Not => Op::Not,
-            OpCode::Add => Op::Add,
-            OpCode::Sub => Op::Sub,
-            OpCode::Mul => Op::Mul,
-            OpCode::Div => Op::Div,
-            OpCode::Call => {
-                let arg = self.fetch_u8()?;
-                Op::Call(arg)
-            }
-            OpCode::AddLocal => Op::AddLocal,
-            OpCode::Load => {
-                let arg = self.fetch_usize()?;
-                Op::Load(arg)
-            }
-            OpCode::Store => {
-                let arg = self.fetch_usize()?;
-                Op::Load(arg)
-            }
-            OpCode::Restore => {
-                let arg = self.fetch_usize()?;
-                Op::Restore(arg)
-            }
-            OpCode::LoadGlobal => {
-                let arg = self.fetch_usize()?;
-                Op::LoadGlobal(arg)
-            }
-            OpCode::StoreGlobal => {
-                let arg = self.fetch_usize()?;
-                Op::StoreGlobal(arg)
-            }
-            OpCode::Jmp => {
-                let arg = self.fetch_usize()?;
-                Op::Jmp(arg)
-            }
-            OpCode::JmpUnless => {
-                let arg = self.fetch_usize()?;
-                Op::JmpUnless(arg)
-            }
-            OpCode::Ret => Op::Ret,
-        };
-
-        Some(op)
-    }
-
-    #[must_use]
-    fn fetch_value(&self, i: usize) -> Option<Value> {
-        self.function.chunk().fetch_value(i)
-    }
-
-    const fn jump(&mut self, i: usize) {
-        self.ip = i;
+    const fn jump(&mut self, to: usize) {
+        self.stream.jump(to);
     }
 
     #[must_use]
@@ -122,35 +47,26 @@ impl<'a> Frame<'a> {
 }
 
 pub struct Vm {
-    debug:   bool,
-    stack:   Vec<Value>,
-    local:   Vec<Value>,
-    globals: Vec<Value>,
+    stack:  Vec<Value>,
+    local:  Vec<Value>,
+    global: Vec<Value>,
 }
 
 impl Default for Vm {
     fn default() -> Self {
-        Self::new()
+        let global = Builtin::core_builtins().map(Value::Builtin).collect();
+        Self {
+            stack: Vec::new(),
+            local: Vec::new(),
+            global,
+        }
     }
 }
 
 impl Vm {
     #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            debug:   false,
-            stack:   Vec::new(),
-            local:   Vec::new(),
-            globals: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_debug(self) -> Self {
-        Self {
-            debug: true,
-            ..self
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     #[must_use]
@@ -167,8 +83,7 @@ impl Vm {
         if lp > self.lp() {
             return Err(RuntimeError::StackUnderflow);
         }
-        let lp = lp;
-        let _ = self.local.drain(lp..);
+        self.local.truncate(lp);
         Ok(())
     }
 
@@ -176,7 +91,7 @@ impl Vm {
         if sp > self.sp() {
             return Err(RuntimeError::StackUnderflow);
         }
-        let _ = self.stack.drain(sp..);
+        self.stack.truncate(sp);
         Ok(())
     }
 
@@ -197,14 +112,11 @@ impl Vm {
 
         let mut frame = self.create_frame(function);
         let ret = loop {
-            if self.debug {
-                self.debug();
-            }
             match self.eval_next(&mut frame) {
                 Ok(Status::Running) => {}
                 Ok(Status::Finished(ret)) => break ret,
                 Err(mut err) => {
-                    let span = frame.fetch_span();
+                    let span = frame.stream.fetch_span();
                     let _ = self.restore_all(sp, lp);
                     err.spans.push(span);
                     return Err(err);
@@ -215,14 +127,10 @@ impl Vm {
         Ok((ret, frame))
     }
 
-    fn debug(&self) {
-        todo!()
-    }
-
     fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
         let lp = self.lp();
         let bp = lp - usize::from(function.arity());
-        Frame::new(function, bp)
+        Frame::new(function.chunk(), bp)
     }
 
     fn pop_stack(&mut self) -> RuntimeResult<Value> {
@@ -233,102 +141,79 @@ impl Vm {
         self.stack.push(value);
     }
 
-    fn add_local(&mut self, value: Value) {
-        self.local.push(value);
-    }
-
-    fn store(&mut self, i: usize, value: Value) -> RuntimeResult<()> {
-        let local = self.local.get_mut(i).ok_or(RuntimeError::LocalNotFound)?;
-        *local = value;
-        Ok(())
-    }
-
-    fn load(&self, i: usize) -> RuntimeResult<Value> {
-        self.local
-            .get(i)
-            .ok_or(RuntimeError::LocalNotFound)
-            .cloned()
-    }
-
-    fn store_global(&mut self, i: usize, value: Value) -> RuntimeResult<()> {
-        let global = self
-            .globals
-            .get_mut(i)
-            .ok_or(RuntimeError::GlobalNotFound)?;
-        *global = value;
-        Ok(())
-    }
-
-    fn load_global(&self, i: usize) -> RuntimeResult<Value> {
-        self.globals
-            .get(i)
-            .ok_or(RuntimeError::GlobalNotFound)
-            .cloned()
-    }
-
     fn grab_args(&mut self, count: u8) -> RuntimeResult<Vec<Value>> {
         let count = usize::from(count);
         if self.sp() < count {
             return Err(RuntimeError::StackUnderflow);
         }
-        let args = self.stack.drain(self.stack.len() - count..).collect();
+        let mut args = Vec::with_capacity(count);
+        args.extend(self.stack.drain(self.stack.len() - count..));
         Ok(args)
     }
 
-    fn prefix_op<T: Convert>(&mut self, f: impl FnOnce(T) -> T) -> RuntimeResult<()> {
-        let value = self.pop_stack()?.try_into()?;
-        let value = f(value);
-        self.push_stack(value.into());
-        Ok(())
-    }
-
-    fn infix_op<T: Convert>(&mut self, f: impl FnOnce(T, T) -> T) -> RuntimeResult<()> {
-        let rhs = self.pop_stack()?.try_into()?;
-        let lhs = self.pop_stack()?.try_into()?;
-        let value = f(lhs, rhs);
-        self.push_stack(value.into());
-        Ok(())
-    }
-
-    fn try_infix_op<T: Convert>(
+    fn prefix_op(
         &mut self,
-        f: impl FnOnce(T, T) -> RuntimeResult<T>,
-    ) -> RuntimeResult<()> {
-        let rhs = self.pop_stack()?.try_into()?;
-        let lhs = self.pop_stack()?.try_into()?;
-        let value = f(lhs, rhs)?;
-        self.push_stack(value.into());
-        Ok(())
+        op: impl FnOnce(Value) -> RuntimeResult<Value>,
+    ) -> RuntimeResult<Status> {
+        let value = self.pop_stack()?;
+        let value = op(value)?;
+        self.push_stack(value);
+        Ok(Status::Running)
     }
 
-    fn eval_next(&mut self, frame: &mut Frame<'_>) -> FrameResult<Status> {
-        let op = frame.fetch().ok_or(RuntimeError::NoInstruction)?;
+    #[inline]
+    fn infix_op(
+        &mut self,
+        op: impl FnOnce(Value, Value) -> RuntimeResult<Value>,
+    ) -> RuntimeResult<Status> {
+        let rhs = self.pop_stack()?;
+        let lhs = self.pop_stack()?;
+        let value = op(lhs, rhs)?;
+        self.push_stack(value);
+        Ok(Status::Running)
+    }
 
-        let mut status = Status::Running;
+    #[inline]
+    fn eval_next(&mut self, frame: &mut Frame<'_>) -> FrameResult<Status> {
+        let op = frame.stream.fetch().ok_or(RuntimeError::NoInstruction)?;
 
         match op {
-            Op::Nop => {}
+            Op::Nop => Ok(Status::Running),
             Op::Pop => {
                 self.pop_stack()?;
+                Ok(Status::Running)
             }
+
             Op::Push(at) => {
                 let value = frame.fetch_value(at).ok_or(RuntimeError::NoValue)?;
                 self.push_stack(value);
+                Ok(Status::Running)
             }
 
-            Op::Add => self.infix_op::<f64>(|a, b| a + b)?,
-            Op::Sub => self.infix_op::<f64>(|a, b| a - b)?,
-            Op::Mul => self.infix_op::<f64>(|a, b| a * b)?,
-            Op::Div => self.try_infix_op::<f64>(|a, b| {
-                if b == 0.0 {
-                    Err(RuntimeError::DivisionByZero)
-                } else {
-                    Ok(a / b)
-                }
-            })?,
+            Op::PushInt(int) => {
+                let value = Value::Int(i64::from(int));
+                self.push_stack(value);
+                Ok(Status::Running)
+            }
 
-            Op::Neg => self.prefix_op::<f64>(|x| -x)?,
-            Op::Not => self.prefix_op::<bool>(|x| !x)?,
+            Op::Add => self.infix_op(|a, b| a + b).map_err(FrameError::from),
+            Op::Sub => self.infix_op(|a, b| a - b).map_err(FrameError::from),
+            Op::Mul => self.infix_op(|a, b| a * b).map_err(FrameError::from),
+            Op::Div => self.infix_op(|a, b| a / b).map_err(FrameError::from),
+
+            Op::Neg => self.prefix_op(|x| -x).map_err(FrameError::from),
+            Op::Not => self.prefix_op(|x| !x).map_err(FrameError::from),
+
+            Op::Eq => {
+                let rhs = self.pop_stack()?;
+                let lhs = self.pop_stack()?;
+                let value = Value::Bool(lhs == rhs);
+                self.push_stack(value);
+                Ok(Status::Running)
+            }
+
+            Op::Lt => self.infix_op(try_lt).map_err(FrameError::from),
+            Op::Le => self.infix_op(try_le).map_err(FrameError::from),
 
             Op::Call(count) => {
                 let value = self.pop_stack()?;
@@ -346,56 +231,77 @@ impl Vm {
                     if function.arity() != count {
                         return Err(FrameError::from(RuntimeError::ArityError));
                     }
-                    for arg in args {
-                        self.add_local(arg);
-                    }
+                    self.local.extend(args);
                     let (ret, frame) = self.run(function)?;
                     self.restore_local(frame.bp())?;
                     self.push_stack(ret);
+                    Ok(Status::Running)
                 } else {
-                    return Err(FrameError::from(RuntimeError::TypeError));
+                    Err(FrameError::from(RuntimeError::TypeError))
                 }
             }
             Op::AddLocal => {
                 let value = self.pop_stack()?;
-                self.add_local(value);
+                self.local.push(value);
+                Ok(Status::Running)
+            }
+            Op::AddGlobal => {
+                let value = self.pop_stack()?;
+                self.global.push(value);
+                Ok(Status::Running)
             }
             Op::Load(at) => {
-                let value = self.load(frame.bp() + at)?;
-                self.push_stack(value);
+                let value = self
+                    .local
+                    .get(frame.bp() + at)
+                    .ok_or(RuntimeError::LocalNotFound)?;
+                self.push_stack(value.clone());
+                Ok(Status::Running)
             }
             Op::Store(at) => {
                 let value = self.pop_stack()?;
-                self.store(frame.bp() + at, value)?;
+                let local = self
+                    .local
+                    .get_mut(frame.bp() + at)
+                    .ok_or(RuntimeError::LocalNotFound)?;
+                *local = value;
+                Ok(Status::Running)
             }
             Op::Restore(count) => {
                 let lp = self.lp() - count;
                 self.restore_local(lp)?;
+                Ok(Status::Running)
             }
             Op::LoadGlobal(at) => {
-                let value = self.load_global(at)?;
-                self.push_stack(value);
+                let value = self.global.get(at).ok_or(RuntimeError::GlobalNotFound)?;
+                self.push_stack(value.clone());
+                Ok(Status::Running)
             }
             Op::StoreGlobal(at) => {
                 let value = self.pop_stack()?;
-                self.store_global(at, value)?;
+                let global = self
+                    .global
+                    .get_mut(at)
+                    .ok_or(RuntimeError::GlobalNotFound)?;
+                *global = value;
+                Ok(Status::Running)
             }
             Op::Jmp(ip) => {
                 frame.jump(ip);
+                Ok(Status::Running)
             }
             Op::JmpUnless(ip) => {
                 let cond: bool = self.pop_stack()?.try_into()?;
                 if !cond {
                     frame.jump(ip);
                 }
+                Ok(Status::Running)
             }
             Op::Ret => {
                 let ret = self.pop_stack()?;
-                status = Status::Finished(ret);
+                Ok(Status::Finished(ret))
             }
         }
-
-        Ok(status)
     }
 }
 

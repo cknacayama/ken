@@ -4,7 +4,8 @@ use kenspan::Spand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind<'a> {
-    Number(&'a str),
+    Float(&'a str),
+    Integer(&'a str),
     Ident(&'a str),
 
     Comma,
@@ -15,6 +16,17 @@ pub enum TokenKind<'a> {
     Star,
     Slash,
     Caret,
+
+    Bang,
+
+    Eq,
+
+    EqEq,
+    BangEq,
+    GreaterEq,
+    LessEq,
+    Greater,
+    Less,
 
     LParen,
     RParen,
@@ -32,7 +44,8 @@ pub enum TokenKind<'a> {
 pub type Token<'a> = Spand<TokenKind<'a>>;
 
 impl<'a> TokenKind<'a> {
-    #[must_use] pub fn try_kw(s: &'a str) -> Self {
+    #[must_use]
+    pub fn try_kw(s: &'a str) -> Self {
         match s {
             "fn" => TokenKind::KwFn,
             "if" => TokenKind::KwIf,
@@ -41,15 +54,30 @@ impl<'a> TokenKind<'a> {
             _ => TokenKind::Ident(s),
         }
     }
+
+    #[must_use]
+    pub const fn can_start_item(&self) -> bool {
+        matches!(self, Self::KwFn | Self::KwLet)
+    }
 }
 
 impl Display for TokenKind<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Number(x) | Self::Ident(x) => write!(f, "{x}"),
+            Self::Float(x) | Self::Integer(x) | Self::Ident(x) => write!(f, "{x}"),
 
             Self::Comma => write!(f, ","),
             Self::Semicolon => write!(f, ";"),
+
+            Self::Bang => write!(f, "!"),
+            Self::Eq => write!(f, "="),
+
+            Self::EqEq => write!(f, "=="),
+            Self::BangEq => write!(f, "!="),
+            Self::Less => write!(f, "<"),
+            Self::LessEq => write!(f, "<="),
+            Self::Greater => write!(f, ">"),
+            Self::GreaterEq => write!(f, ">="),
 
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),

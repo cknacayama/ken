@@ -2,7 +2,7 @@ use kenspan::{Span, Spand};
 use thiserror::Error;
 
 use crate::ast::{
-    self, Block, Expr, ExprKind, InfixOp, Item, ItemKind, Operator, PrefixOp, Stmt, StmtKind,
+    self, Block, Expr, ExprKind, InfixOp, Item, ItemKind, Local, Operator, PrefixOp, Stmt, StmtKind,
 };
 use crate::token::{Token, TokenKind};
 
@@ -34,6 +34,10 @@ impl<'a> Parser<'a> {
     #[must_use]
     pub const fn new(tokens: Vec<Token<'a>>) -> Self {
         Self { tokens, current: 0 }
+    }
+
+    const fn finished(&self) -> bool {
+        self.current >= self.tokens.len()
     }
 
     fn last_span(&self) -> Span {
@@ -110,23 +114,50 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub fn parse_all(&mut self) -> Result<Vec<Stmt<'a>>, Vec<ParseError>> {
+        let mut stmts = Vec::new();
+        let mut errors = Vec::new();
+
+        for item in self {
+            match item {
+                Ok(ok) => stmts.push(ok),
+                Err(err) => errors.push(err),
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(stmts)
+        } else {
+            Err(errors)
+        }
+    }
+
     pub fn parse_stmt(&mut self) -> ParseResult<Stmt<'a>> {
-        if let Some(Token {
+        match self.peek() {
+            Some(Token {
                 kind: TokenKind::Semicolon,
                 span,
-            }) = self.peek() {
-            self.eat();
-            Ok(Stmt::new(StmtKind::Empty, span))
-        } else {
-            let expr = self.parse_expr()?;
-            if let Some(span) = self.next_if_kind(TokenKind::Semicolon) {
-                let span = expr.span.join(span);
-                let kind = StmtKind::Semi(expr);
+            }) => {
+                self.eat();
+                Ok(Stmt::new(StmtKind::Empty, span))
+            }
+            Some(Token { kind, .. }) if kind.can_start_item() => {
+                let item = self.parse_item()?;
+                let span = item.span;
+                let kind = StmtKind::Item(item);
                 Ok(Stmt::new(kind, span))
-            } else {
-                let span = expr.span;
-                let kind = StmtKind::Expr(expr);
-                Ok(Stmt::new(kind, span))
+            }
+            _ => {
+                let expr = self.parse_expr()?;
+                if let Some(span) = self.next_if_kind(TokenKind::Semicolon) {
+                    let span = expr.span.join(span);
+                    let kind = StmtKind::Semi(expr);
+                    Ok(Stmt::new(kind, span))
+                } else {
+                    let span = expr.span;
+                    let kind = StmtKind::Expr(expr);
+                    Ok(Stmt::new(kind, span))
+                }
             }
         }
     }
@@ -134,7 +165,19 @@ impl<'a> Parser<'a> {
     pub fn parse_item(&mut self) -> ParseResult<Item<'a>> {
         let Token { kind, span } = self.next()?;
         match kind {
-            TokenKind::KwLet => todo!(),
+            TokenKind::KwLet => {
+                let name = self.expect_name()?;
+                let bind = if self.next_if_kind(TokenKind::Eq).is_some() {
+                    let expr = self.parse_expr()?;
+                    Some(expr)
+                } else {
+                    None
+                };
+                let semi = self.expect(TokenKind::Semicolon)?;
+                let span = span.join(semi);
+                let kind = ItemKind::Let(Local { name, bind });
+                Ok(Item::new(kind, span))
+            }
             TokenKind::KwFn => {
                 let name = self.expect_name()?;
                 let (params, _) = self.expect_delimited(Paren, Self::expect_name)?;
@@ -299,8 +342,12 @@ impl<'a> Parser<'a> {
                 let kind = ExprKind::Ident(id);
                 Ok(Expr::new(kind, span))
             }
-            TokenKind::Number(lit) => {
-                let kind = ExprKind::Number(lit.parse().unwrap());
+            TokenKind::Float(lit) => {
+                let kind = ExprKind::Float(lit.parse().unwrap());
+                Ok(Expr::new(kind, span))
+            }
+            TokenKind::Integer(lit) => {
+                let kind = ExprKind::Integer(lit.parse().unwrap());
                 Ok(Expr::new(kind, span))
             }
             TokenKind::LParen => {
@@ -321,7 +368,6 @@ trait Delim {
 }
 
 struct Paren;
-struct Brace;
 struct Bracket;
 struct Compound;
 
@@ -349,18 +395,6 @@ impl Delim for Bracket {
     }
 }
 
-impl Delim for Brace {
-    fn opening() -> TokenKind<'static> {
-        TokenKind::LBrace
-    }
-    fn closing() -> TokenKind<'static> {
-        TokenKind::RBrace
-    }
-    fn separator() -> Option<TokenKind<'static>> {
-        Some(TokenKind::Comma)
-    }
-}
-
 impl Delim for Compound {
     fn opening() -> TokenKind<'static> {
         TokenKind::LBrace
@@ -370,5 +404,16 @@ impl Delim for Compound {
     }
     fn separator() -> Option<TokenKind<'static>> {
         None
+    }
+}
+
+impl<'a> Iterator for Parser<'a> {
+    type Item = ParseResult<Stmt<'a>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished() {
+            None
+        } else {
+            Some(self.parse_stmt())
+        }
     }
 }
