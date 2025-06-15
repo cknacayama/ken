@@ -7,6 +7,7 @@ pub enum TokenKind<'a> {
     Float(&'a str),
     Integer(&'a str),
     Ident(&'a str),
+    String(&'a str),
 
     Comma,
     Semicolon,
@@ -15,6 +16,7 @@ pub enum TokenKind<'a> {
     Minus,
     Star,
     Slash,
+    Percent,
     Caret,
 
     Bang,
@@ -59,12 +61,18 @@ impl<'a> TokenKind<'a> {
     pub const fn can_start_item(&self) -> bool {
         matches!(self, Self::KwFn | Self::KwLet)
     }
+
+    pub const fn can_recover(&self) -> bool {
+        matches!(self, Self::KwFn | Self::KwLet)
+    }
 }
 
 impl Display for TokenKind<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Float(x) | Self::Integer(x) | Self::Ident(x) => write!(f, "{x}"),
+            Self::Float(x) | Self::Integer(x) | Self::Ident(x) | Self::String(x) => {
+                write!(f, "{x}")
+            }
 
             Self::Comma => write!(f, ","),
             Self::Semicolon => write!(f, ";"),
@@ -83,6 +91,7 @@ impl Display for TokenKind<'_> {
             Self::Minus => write!(f, "-"),
             Self::Star => write!(f, "*"),
             Self::Slash => write!(f, "/"),
+            Self::Percent => write!(f, "%"),
             Self::Caret => write!(f, "^"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use kenspan::{Span, Spand};
 
 use crate::token::TokenKind;
@@ -15,6 +17,16 @@ impl Fixity {
     #[must_use]
     pub const fn is_right(self) -> bool {
         matches!(self, Self::InfixRight)
+    }
+
+    #[must_use]
+    pub const fn is_nonfix(&self) -> bool {
+        matches!(self, Self::Infix)
+    }
+
+    #[must_use]
+    pub const fn is_left(&self) -> bool {
+        matches!(self, Self::InfixLeft)
     }
 }
 
@@ -74,6 +86,7 @@ pub enum InfixOp {
     Sub,
     Mul,
     Div,
+    Rem,
     Pow,
 
     Eq,
@@ -82,6 +95,8 @@ pub enum InfixOp {
     Ge,
     Lt,
     Le,
+
+    Assign,
 }
 
 impl Operator for PrefixOp {
@@ -102,9 +117,10 @@ impl Operator for PrefixOp {
 impl Operator for InfixOp {
     fn as_operator(self) -> (u8, Fixity) {
         match self {
+            Self::Assign => (1, Fixity::Infix),
             Self::Eq | Self::Ne | Self::Gt | Self::Ge | Self::Lt | Self::Le => (2, Fixity::Infix),
             Self::Add | Self::Sub => (3, Fixity::InfixLeft),
-            Self::Mul | Self::Div => (4, Fixity::InfixLeft),
+            Self::Mul | Self::Div | Self::Rem => (4, Fixity::InfixLeft),
             Self::Pow => (5, Fixity::InfixRight),
         }
     }
@@ -115,7 +131,9 @@ impl Operator for InfixOp {
             TokenKind::Minus => Some(Self::Sub),
             TokenKind::Star => Some(Self::Mul),
             TokenKind::Slash => Some(Self::Div),
+            TokenKind::Percent => Some(Self::Rem),
             TokenKind::Caret => Some(Self::Pow),
+            TokenKind::Eq => Some(Self::Assign),
             TokenKind::EqEq => Some(Self::Eq),
             TokenKind::BangEq => Some(Self::Ne),
             TokenKind::Greater => Some(Self::Gt),
@@ -165,6 +183,7 @@ pub enum ExprKind<'a> {
     Ident(&'a str),
     Float(f64),
     Integer(i64),
+    String(Cow<'a, str>),
 
     Block(Block<'a>),
 

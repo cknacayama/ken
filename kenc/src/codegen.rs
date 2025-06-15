@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use kenspan::{Span, Spand};
 use kenvm::builtin::Builtin;
 use kenvm::bytecode::{ChunkBuilder, Op};
-use kenvm::obj::Function;
+use kenvm::obj::{Function, Obj};
 use kenvm::value::Value;
 
 use crate::ast::{
@@ -11,22 +13,32 @@ use crate::ast::{
 };
 
 #[derive(Debug)]
-pub struct GlobalMap<'src> {
-    globals: HashMap<&'src str, usize>,
+pub struct GlobalMap {
+    globals: HashMap<Rc<str>, usize>,
+    strings: HashSet<Rc<str>>,
     current: usize,
 }
 
-impl Default for GlobalMap<'_> {
+impl Default for GlobalMap {
     fn default() -> Self {
         let builtins = Builtin::core_builtins();
         let current = builtins.len();
-        let globals = builtins.enumerate().map(|(at, b)| (b.name(), at)).collect();
-        Self { globals, current }
+        let globals = builtins
+            .enumerate()
+            .map(|(at, b)| (Rc::from(b.name()), at))
+            .collect::<HashMap<_, _>>();
+        let strings = globals.keys().cloned().collect();
+        Self {
+            globals,
+            current,
+            strings,
+        }
     }
 }
 
-impl<'a> GlobalMap<'a> {
-    fn add(&mut self, name: &'a str) -> usize {
+impl GlobalMap {
+    fn add(&mut self, name: &str) -> usize {
+        let name = self.intern(Cow::Borrowed(name));
         let at = self.current;
         self.current += 1;
         self.globals.insert(name, at);
@@ -34,37 +46,48 @@ impl<'a> GlobalMap<'a> {
     }
 
     #[must_use]
-    fn get(&self, name: &'a str) -> Option<usize> {
+    fn get(&self, name: &str) -> Option<usize> {
         self.globals.get(name).copied()
+    }
+
+    #[must_use]
+    fn intern(&mut self, s: Cow<'_, str>) -> Rc<str> {
+        if let Some(s) = self.strings.get(&*s) {
+            s.clone()
+        } else {
+            let s = Rc::<str>::from(s);
+            self.strings.insert(s.clone());
+            s
+        }
     }
 }
 
-pub struct Codegen<'src, 'glob> {
-    name:    &'src str,
-    globals: &'glob mut GlobalMap<'src>,
-    scope:   Vec<HashMap<&'src str, usize>>,
-    locals:  usize,
-    arity:   u8,
-    stack:   usize,
-    chunk:   ChunkBuilder,
+pub struct Codegen<'a, 'glob> {
+    name:   &'a str,
+    global: &'glob mut GlobalMap,
+    scope:  Vec<HashMap<&'a str, usize>>,
+    local:  usize,
+    stack:  usize,
+    arity:  u8,
+    chunk:  ChunkBuilder,
 }
 
-impl<'src, 'glob> Codegen<'src, 'glob> {
+impl<'a, 'glob> Codegen<'a, 'glob> {
     #[must_use]
-    pub const fn new(name: &'src str, arity: u8, globals: &'glob mut GlobalMap<'src>) -> Self {
+    pub const fn new(name: &'a str, arity: u8, globals: &'glob mut GlobalMap) -> Self {
         Self {
             name,
             arity,
             stack: 0,
-            locals: 0,
-            globals,
+            local: 0,
+            global: globals,
             scope: Vec::new(),
             chunk: ChunkBuilder::new(),
         }
     }
 
     #[must_use]
-    pub const fn function_name(&self) -> &'src str {
+    pub const fn function_name(&self) -> &'a str {
         self.name
     }
 
@@ -86,19 +109,19 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         }
     }
 
-    fn add_variable(&mut self, name: &'src str) -> bool {
+    fn add_variable(&mut self, name: &'a str) -> bool {
         if let Some(scope) = self.scope.last_mut() {
-            let pos = self.locals;
-            self.locals += 1;
+            let pos = self.local;
+            self.local += 1;
             scope.insert(name, pos);
             true
         } else {
-            self.globals.add(name);
+            self.global.add(name);
             false
         }
     }
 
-    fn bind_variable(&mut self, name: &'src str, span: Span) -> GenSpan {
+    fn bind_variable(&mut self, name: &'a str, span: Span) -> GenSpan {
         if self.add_variable(name) {
             self.push_op(Op::AddLocal, span)
         } else {
@@ -106,11 +129,11 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         }
     }
 
-    fn get_global(&self, name: &'src str) -> Option<usize> {
-        self.globals.get(name)
+    fn get_global(&self, name: &'a str) -> Option<usize> {
+        self.global.get(name)
     }
 
-    fn get_local(&self, name: &'src str) -> Option<usize> {
+    fn get_local(&self, name: &'a str) -> Option<usize> {
         self.scope
             .iter()
             .rev()
@@ -159,7 +182,7 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         Ok(span)
     }
 
-    pub fn compile_stmt(&mut self, Spand { kind, span }: Stmt<'src>) -> CodegenResult<GenSpan> {
+    pub fn compile_stmt(&mut self, Spand { kind, span }: Stmt<'a>) -> CodegenResult<GenSpan> {
         match kind {
             StmtKind::Item(item) => self.compile_item(item),
             StmtKind::Expr(expr) => self.compile_expr(expr),
@@ -176,19 +199,25 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         }
     }
 
-    pub fn compile_item(&mut self, Item { kind, span }: Item<'src>) -> CodegenResult<GenSpan> {
+    pub fn compile_item(&mut self, Item { kind, span }: Item<'a>) -> CodegenResult<GenSpan> {
         match kind {
             ItemKind::Fn(f) => self.compile_fn(f, span),
             ItemKind::Let(local) => self.compile_local(local, span),
         }
     }
 
-    pub fn compile_expr(&mut self, Expr { kind, span }: Expr<'src>) -> CodegenResult<GenSpan> {
+    pub fn compile_expr(&mut self, Expr { kind, span }: Expr<'a>) -> CodegenResult<GenSpan> {
         match kind {
             ExprKind::Ident(id) => self.compile_ident_expr(id, span),
             ExprKind::Float(n) => Ok(self.compile_float_expr(n, span)),
             ExprKind::Integer(n) => Ok(self.compile_int_expr(n, span)),
+            ExprKind::String(s) => Ok(self.compile_str_expr(s, span)),
             ExprKind::Prefix { op, expr } => self.compile_prefix_expr(op, *expr, span),
+            ExprKind::Infix {
+                op: InfixOp::Assign,
+                lhs,
+                rhs,
+            } => self.compile_assign(*lhs, *rhs, span),
             ExprKind::Infix { op, lhs, rhs } => self.compile_infix_expr(op, *lhs, *rhs, span),
             ExprKind::Block(block) => self.compile_block(block),
             ExprKind::If { cond, then, els } => self.compile_if(*cond, then, els, span),
@@ -198,13 +227,13 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
 
     fn compile_fn(
         &mut self,
-        Fn { name, params, body }: Fn<'src>,
+        Fn { name, params, body }: Fn<'a>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let count = u8::try_from(params.len())
             .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
         let local = self.add_variable(name);
-        let mut codegen = Codegen::new(name, count, self.globals);
+        let mut codegen = Codegen::new(name, count, self.global);
         codegen.begin_scope();
         for param in params {
             codegen.add_variable(param);
@@ -223,7 +252,7 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         Ok(body.join(end))
     }
 
-    fn compile_local(&mut self, local: Local<'src>, span: Span) -> CodegenResult<GenSpan> {
+    fn compile_local(&mut self, local: Local<'a>, span: Span) -> CodegenResult<GenSpan> {
         let bind = if let Some(bind) = local.bind {
             self.compile_expr(bind)?
         } else {
@@ -238,9 +267,9 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
 
     fn compile_if(
         &mut self,
-        cond: Expr<'src>,
-        then: Block<'src>,
-        els: Block<'src>,
+        cond: Expr<'a>,
+        then: Block<'a>,
+        els: Block<'a>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let cond = self.compile_expr(cond)?;
@@ -262,8 +291,8 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
 
     fn compile_call(
         &mut self,
-        callee: Expr<'src>,
-        args: Box<[Expr<'src>]>,
+        callee: Expr<'a>,
+        args: Box<[Expr<'a>]>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let count = u8::try_from(args.len())
@@ -278,7 +307,7 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         Ok(span)
     }
 
-    fn compile_block(&mut self, Block { stmts, span }: Block<'src>) -> CodegenResult<GenSpan> {
+    fn compile_block(&mut self, Block { stmts, span }: Block<'a>) -> CodegenResult<GenSpan> {
         let stack = self.begin_scope();
         let mut stmts = self.compile_many(stmts, Self::compile_stmt)?;
         if self.stack == stack {
@@ -305,7 +334,14 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         op
     }
 
-    fn compile_ident_expr(&mut self, name: &'src str, span: Span) -> CodegenResult<GenSpan> {
+    fn compile_str_expr(&mut self, s: Cow<'a, str>, span: Span) -> GenSpan {
+        let s = self.global.intern(s);
+        let op = self.push_push(Value::Obj(Rc::new(Obj::String(s))), span);
+        self.stack += 1;
+        op
+    }
+
+    fn compile_ident_expr(&mut self, name: &'a str, span: Span) -> CodegenResult<GenSpan> {
         let op = if let Some(local) = self.get_local(name) {
             Op::Load(local)
         } else {
@@ -319,10 +355,44 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
         Ok(op)
     }
 
+    fn compile_lvalue(
+        &mut self,
+        Spand { kind, span: lspan }: Expr<'a>,
+        span: Span,
+    ) -> CodegenResult<GenSpan> {
+        match kind {
+            ExprKind::Ident(name) => {
+                if let Some(local) = self.get_local(name) {
+                    Ok(self.push_op(Op::Store(local), lspan))
+                } else if let Some(global) = self.get_global(name) {
+                    Ok(self.push_op(Op::StoreGlobal(global), lspan))
+                } else {
+                    Err(CodegenError::new(
+                        CodegenErrorKind::UndefinedVariable,
+                        lspan,
+                    ))
+                }
+            }
+            _ => Err(CodegenError::new(CodegenErrorKind::NotAssignable, span)),
+        }
+    }
+
+    fn compile_assign(
+        &mut self,
+        lhs: Expr<'a>,
+        rhs: Expr<'a>,
+        span: Span,
+    ) -> CodegenResult<GenSpan> {
+        let rvalue = self.compile_expr(rhs)?;
+        let lvalue = self.compile_lvalue(lhs, span)?;
+        self.stack -= 1;
+        Ok(rvalue.join(lvalue))
+    }
+
     fn compile_prefix_expr(
         &mut self,
         op: PrefixOp,
-        expr: Expr<'src>,
+        expr: Expr<'a>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let start = self.compile_expr(expr)?;
@@ -335,8 +405,8 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
     fn compile_infix_expr(
         &mut self,
         op: InfixOp,
-        lhs: Expr<'src>,
-        rhs: Expr<'src>,
+        lhs: Expr<'a>,
+        rhs: Expr<'a>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let start = self.compile_expr(lhs)?;
@@ -346,9 +416,12 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
             InfixOp::Sub => self.push_op(Op::Sub, span),
             InfixOp::Mul => self.push_op(Op::Mul, span),
             InfixOp::Div => self.push_op(Op::Div, span),
+            InfixOp::Rem => self.push_op(Op::Rem, span),
             InfixOp::Pow => {
-                let pow = Value::Builtin(Builtin::pow());
-                self.push_push(pow, span);
+                let pow = self
+                    .get_global("pow")
+                    .ok_or_else(|| CodegenError::new(CodegenErrorKind::UndefinedVariable, span))?;
+                self.push_op(Op::LoadGlobal(pow), span);
                 self.push_op(Op::Call(2), span)
             }
             InfixOp::Eq => self.push_op(Op::Eq, span),
@@ -366,6 +439,8 @@ impl<'src, 'glob> Codegen<'src, 'glob> {
             }
             InfixOp::Lt => self.push_op(Op::Lt, span),
             InfixOp::Le => self.push_op(Op::Le, span),
+
+            InfixOp::Assign => unreachable!(),
         };
         self.stack -= 1;
         Ok(start.join(end))
@@ -385,10 +460,8 @@ pub enum CodegenErrorKind {
     UndefinedVariable,
     #[error("too many arguments")]
     TooManyArgs,
-    #[error("not jmp")]
-    NotJmp,
-    #[error("scope error")]
-    ScopeError,
+    #[error("not assignable")]
+    NotAssignable,
 }
 
 pub type CodegenError = Spand<CodegenErrorKind>;

@@ -1,10 +1,9 @@
 #![allow(clippy::cast_precision_loss)]
 use std::fmt::Display;
-use std::ops::{Add, Div, Mul, Neg, Not, Sub};
+use std::ops::{Add, Div, Mul, Neg, Not, Rem, Sub};
 use std::rc::Rc;
 
-use crate::builtin::Builtin;
-use crate::obj::{Function, ObjRef};
+use crate::obj::{Function, MutObjRef, Obj, ObjRef};
 use crate::{RuntimeError, RuntimeResult};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,13 +12,21 @@ pub enum Value {
     Bool(bool),
     Int(i64),
     Float(f64),
-    Builtin(Builtin),
+    MutObj(MutObjRef),
     Obj(ObjRef),
 }
 
 impl Value {
-    pub const fn as_object(&self) -> RuntimeResult<&ObjRef> {
+    pub const fn as_obj(&self) -> RuntimeResult<&ObjRef> {
         if let Self::Obj(v) = self {
+            Ok(v)
+        } else {
+            Err(RuntimeError::TypeError)
+        }
+    }
+
+    pub const fn as_mut_obj(&self) -> RuntimeResult<&MutObjRef> {
+        if let Self::MutObj(v) = self {
             Ok(v)
         } else {
             Err(RuntimeError::TypeError)
@@ -34,13 +41,20 @@ impl Display for Value {
             Self::Bool(b) => write!(f, "{b}"),
             Self::Int(x) => write!(f, "{x}"),
             Self::Float(x) => write!(f, "{x}"),
-            Self::Builtin(builtin) => write!(f, "{builtin}"),
-            Self::Obj(obj) => {
+            Self::MutObj(obj) => {
                 let ptr = Rc::as_ptr(obj);
                 let obj = obj.borrow();
                 if obj.is_pretty() {
                     write!(f, "{obj}")
                 } else {
+                    write!(f, "<{obj} at {ptr:?}>")
+                }
+            }
+            Self::Obj(obj) => {
+                if obj.is_pretty() {
+                    write!(f, "{obj}")
+                } else {
+                    let ptr = Rc::as_ptr(obj);
                     write!(f, "<{obj} at {ptr:?}>")
                 }
             }
@@ -100,12 +114,8 @@ macro_rules! value_impl {
         impl From<$val> for Value {
             #[inline]
             fn from(value: $val) -> Self {
-                use std::cell::RefCell;
-
-                use crate::obj::Obj;
-
                 let obj = Obj::$variant(value);
-                Self::Obj(Rc::new(RefCell::new(obj)))
+                Self::Obj(Rc::new(obj))
             }
         }
     };
@@ -114,8 +124,7 @@ macro_rules! value_impl {
 value_impl!(f64, Float);
 value_impl!(i64, Int);
 value_impl!(bool, Bool);
-value_impl!(ObjRef, Obj);
-value_impl!(Builtin, Builtin);
+value_impl!(MutObjRef, MutObj);
 value_impl!(Function, obj Function);
 
 infix_impl!(Add::add);
@@ -135,6 +144,24 @@ impl Div for Value {
             (Self::Int(lhs), Self::Float(rhs)) => Ok(Self::Float(lhs as f64 / rhs)),
             (Self::Float(lhs), Self::Int(rhs)) => Ok(Self::Float(lhs / rhs as f64)),
             (Self::Float(lhs), Self::Float(rhs)) => Ok(Self::Float(lhs / rhs)),
+            _ => Err(RuntimeError::TypeError),
+        }
+    }
+}
+
+impl Rem for Value {
+    type Output = RuntimeResult<Self>;
+
+    #[inline]
+    fn rem(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Self::Int(lhs), Self::Int(rhs)) => lhs
+                .checked_rem(rhs)
+                .ok_or(RuntimeError::DivisionByZero)
+                .map(Value::Int),
+            (Self::Int(lhs), Self::Float(rhs)) => Ok(Self::Float(lhs as f64 % rhs)),
+            (Self::Float(lhs), Self::Int(rhs)) => Ok(Self::Float(lhs % rhs as f64)),
+            (Self::Float(lhs), Self::Float(rhs)) => Ok(Self::Float(lhs % rhs)),
             _ => Err(RuntimeError::TypeError),
         }
     }

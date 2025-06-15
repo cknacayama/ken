@@ -2,22 +2,37 @@ use std::cell::RefCell;
 use std::fmt::Display;
 use std::rc::Rc;
 
+use crate::builtin::Builtin;
 use crate::bytecode::Chunk;
 use crate::value::Value;
 
-pub type ObjRef = Rc<RefCell<Obj>>;
+pub type MutObjRef = Rc<RefCell<MutObj>>;
+pub type ObjRef = Rc<Obj>;
 
 #[derive(Debug, PartialEq)]
 pub enum Obj {
-    List(Vec<Value>),
     Function(Function),
+    Builtin(Builtin),
+    String(Rc<str>),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MutObj {
+    List(Vec<Value>),
     Closure(Closure),
+}
+
+impl MutObj {
+    #[must_use]
+    pub const fn is_pretty(&self) -> bool {
+        matches!(self, Self::List(_))
+    }
 }
 
 impl Obj {
     #[must_use]
     pub const fn is_pretty(&self) -> bool {
-        matches!(self, Self::List(_))
+        matches!(self, Self::String(_))
     }
 }
 
@@ -64,18 +79,25 @@ fn print_list(values: &[Value], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Re
     write!(f, "]")
 }
 
-impl Display for Obj {
+impl Display for MutObj {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::List(values) => print_list(values, f),
-            Self::Function(function) => {
-                write!(f, "fn{{ arity: {} }}", function.arity())
-            }
             Self::Closure(closure) => {
                 write!(f, "fn{{ arity: {}, closed: ", closure.function.arity())?;
                 print_list(&closure.captures, f)?;
                 write!(f, " }}")
             }
+        }
+    }
+}
+
+impl Display for Obj {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Function(function) => write!(f, "fn{{ arity: {} }}", function.arity()),
+            Self::Builtin(builtin) => write!(f, "builtin '{}'", builtin.name()),
+            Self::String(string) => write!(f, "{string}"),
         }
     }
 }

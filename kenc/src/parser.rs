@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use kenspan::{Span, Spand};
 use thiserror::Error;
 
@@ -10,6 +12,8 @@ use crate::token::{Token, TokenKind};
 pub enum ParseErrorKind {
     #[error("unexpected end of input")]
     UnexpectedEnd,
+    #[error("invalid escape")]
+    InvalidEscape,
     #[error("invalid expression")]
     InvalidExpr,
     #[error("expected expression")]
@@ -18,6 +22,8 @@ pub enum ParseErrorKind {
     ExpectedItem,
     #[error("expected identifier")]
     ExpectedIdent,
+    #[error("expected escape")]
+    ExpectedEscape,
     #[error("expected '{0}'")]
     Expected(TokenKind<'static>),
 }
@@ -41,11 +47,17 @@ impl<'a> Parser<'a> {
     }
 
     fn last_span(&self) -> Span {
-        self.tokens.last().map(|tk| tk.span).unwrap_or_default()
+        self.tokens
+            .get(self.current)
+            .or_else(|| self.tokens.last())
+            .map(|tk| tk.span)
+            .unwrap_or_default()
     }
 
-    fn peek_n(&self, n: usize) -> Option<Token<'a>> {
-        self.tokens.get(self.current + n).copied()
+    fn peek_n(&self, n: isize) -> Option<Token<'a>> {
+        self.tokens
+            .get(self.current.saturating_add_signed(n))
+            .copied()
     }
 
     fn peek(&self) -> Option<Token<'a>> {
@@ -114,14 +126,28 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn recover(&mut self) {
+        while !(self.finished()
+            || self.peek().is_some_and(|tk| tk.kind.can_recover())
+            || self
+                .peek_n(-1)
+                .is_some_and(|tk| tk.kind == TokenKind::Semicolon))
+        {
+            self.eat();
+        }
+    }
+
     pub fn parse_all(&mut self) -> Result<Vec<Stmt<'a>>, Vec<ParseError>> {
         let mut stmts = Vec::new();
         let mut errors = Vec::new();
 
-        for item in self {
+        while let Some(item) = Iterator::next(self) {
             match item {
                 Ok(ok) => stmts.push(ok),
-                Err(err) => errors.push(err),
+                Err(err) => {
+                    errors.push(err);
+                    self.recover();
+                }
             }
         }
 
@@ -251,10 +277,16 @@ impl<'a> Parser<'a> {
                 .peek()
                 .and_then(|tk| InfixOp::from_token(tk.kind))
                 .map(Operator::as_data)
-                .filter(|new| {
-                    new.prec() > op.prec() || (new.fix().is_right() && new.prec() == op.prec())
-                })
             {
+                if op.prec() == new.prec() && (op.fix() != op.fix() || op.fix().is_nonfix()) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::InvalidExpr,
+                        self.last_span(),
+                    ));
+                }
+                if op.prec() > new.prec() || (op.prec() == new.prec() && op.fix().is_left()) {
+                    break;
+                }
                 let min = op.prec() + u8::from(new.prec() > op.prec());
                 rhs = self.parse_infix(rhs, min)?;
             }
@@ -338,6 +370,7 @@ impl<'a> Parser<'a> {
                 let kind = ExprKind::Block(block);
                 Ok(Expr::new(kind, span))
             }
+            TokenKind::String(s) => Self::parse_string(s, span),
             TokenKind::Ident(id) => {
                 let kind = ExprKind::Ident(id);
                 Ok(Expr::new(kind, span))
@@ -358,6 +391,40 @@ impl<'a> Parser<'a> {
 
             _ => Err(ParseError::new(ParseErrorKind::InvalidExpr, span)),
         }
+    }
+
+    fn parse_string(s: &'a str, span: Span) -> ParseResult<Expr<'a>> {
+        let s = &s[1..s.len() - 1];
+
+        if !s.contains('\\') {
+            let kind = ExprKind::String(Cow::Borrowed(s));
+            return Ok(Expr::new(kind, span));
+        }
+
+        let mut buf = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            let c = if c == '\\' {
+                let c = chars
+                    .next()
+                    .ok_or_else(|| ParseError::new(ParseErrorKind::ExpectedEscape, span))?;
+                match c {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '0' => '\0',
+                    '\'' => '\'',
+                    '"' => '"',
+                    _ => return Err(ParseError::new(ParseErrorKind::InvalidEscape, span)),
+                }
+            } else {
+                c
+            };
+            buf.push(c);
+        }
+
+        let kind = ExprKind::String(Cow::Owned(buf));
+        Ok(Expr::new(kind, span))
     }
 }
 
@@ -409,6 +476,7 @@ impl Delim for Compound {
 
 impl<'a> Iterator for Parser<'a> {
     type Item = ParseResult<Stmt<'a>>;
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished() {
             None

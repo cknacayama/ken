@@ -3,6 +3,8 @@ pub mod bytecode;
 pub mod obj;
 pub mod value;
 
+use std::rc::Rc;
+
 use kenspan::Span;
 
 use crate::builtin::Builtin;
@@ -54,21 +56,18 @@ pub struct Vm {
 
 impl Default for Vm {
     fn default() -> Self {
-        let global = Builtin::core_builtins().map(Value::Builtin).collect();
+        let global = Builtin::core_builtins()
+            .map(|b| Value::Obj(Rc::new(Obj::Builtin(b))))
+            .collect();
         Self {
+            global,
             stack: Vec::new(),
             local: Vec::new(),
-            global,
         }
     }
 }
 
 impl Vm {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     #[must_use]
     const fn sp(&self) -> usize {
         self.stack.len()
@@ -200,6 +199,7 @@ impl Vm {
             Op::Sub => self.infix_op(|a, b| a - b).map_err(FrameError::from),
             Op::Mul => self.infix_op(|a, b| a * b).map_err(FrameError::from),
             Op::Div => self.infix_op(|a, b| a / b).map_err(FrameError::from),
+            Op::Rem => self.infix_op(|a, b| a % b).map_err(FrameError::from),
 
             Op::Neg => self.prefix_op(|x| -x).map_err(FrameError::from),
             Op::Not => self.prefix_op(|x| !x).map_err(FrameError::from),
@@ -218,26 +218,24 @@ impl Vm {
             Op::Call(count) => {
                 let value = self.pop_stack()?;
                 let args = self.grab_args(count)?;
-                if let Value::Builtin(f) = value {
-                    let value = f(&args)?;
-                    self.push_stack(value);
-                    return Ok(Status::Running);
-                }
 
-                let object = value.as_object()?;
-                let callee = object.try_borrow().map_err(|_| RuntimeError::BorrowError)?;
-
-                if let Obj::Function(function) = &*callee {
-                    if function.arity() != count {
-                        return Err(FrameError::from(RuntimeError::ArityError));
+                match value.as_obj()?.as_ref() {
+                    Obj::Function(function) => {
+                        if function.arity() != count {
+                            return Err(FrameError::from(RuntimeError::ArityError));
+                        }
+                        self.local.extend(args);
+                        let (ret, frame) = self.run(function)?;
+                        self.restore_local(frame.bp())?;
+                        self.push_stack(ret);
+                        Ok(Status::Running)
                     }
-                    self.local.extend(args);
-                    let (ret, frame) = self.run(function)?;
-                    self.restore_local(frame.bp())?;
-                    self.push_stack(ret);
-                    Ok(Status::Running)
-                } else {
-                    Err(FrameError::from(RuntimeError::TypeError))
+                    Obj::Builtin(builtin) => {
+                        let value = builtin(&args)?;
+                        self.push_stack(value);
+                        Ok(Status::Running)
+                    }
+                    _ => Err(FrameError::from(RuntimeError::TypeError)),
                 }
             }
             Op::AddLocal => {

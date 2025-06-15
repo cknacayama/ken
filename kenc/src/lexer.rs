@@ -9,6 +9,8 @@ use crate::token::{Token, TokenKind};
 pub enum LexErrorKind {
     #[error("invalid character '{0}'")]
     InvalidChar(char),
+    #[error("unterminated string")]
+    UnterminatedString,
 }
 
 pub struct Lexer<'a> {
@@ -125,6 +127,20 @@ impl<'a> Lexer<'a> {
         Token::new(kind(s), self.make_span())
     }
 
+    fn string(&mut self) -> LexResult<Token<'a>> {
+        self.eat_while(|c| !matches!(c, '"' | '\n'));
+
+        if self.first() != '"' {
+            let span = self.make_span();
+            self.eat_while(|c| c != '"');
+            return Err(LexError::new(LexErrorKind::UnterminatedString, span));
+        }
+
+        self.bump();
+        let s = self.view();
+        Ok(Token::new(TokenKind::String(s), self.make_span()))
+    }
+
     fn ident(&mut self) -> Token<'a> {
         self.eat_while(|c| c.is_ascii_alphanumeric() || c == '_');
         let s = self.view();
@@ -139,7 +155,7 @@ impl<'a> Lexer<'a> {
                 Some(Ok(Token::new(TokenKind::$name, self.make_span())))
             };
             ($e:expr) => {
-                Some(Ok($e))
+                Some($e)
             };
             ($tk:ident, $cont:expr => $cont_tk:ident) => {
                 if self.first() == $cont {
@@ -169,6 +185,7 @@ impl<'a> Lexer<'a> {
             '-' => token!(Minus),
             '*' => token!(Star),
             '/' => token!(Slash),
+            '%' => token!(Percent),
             '^' => token!(Caret),
 
             '=' => token!(Eq, '=' => EqEq),
@@ -176,8 +193,9 @@ impl<'a> Lexer<'a> {
             '>' => token!(Greater, '=' => GreaterEq),
             '<' => token!(Less, '=' => LessEq),
 
-            '0'..='9' => token!(self.number()),
-            'a'..='z' | 'A'..='Z' | '_' => token!(self.ident()),
+            '0'..='9' => Some(Ok(self.number())),
+            'a'..='z' | 'A'..='Z' | '_' => Some(Ok(self.ident())),
+            '"' => Some(self.string()),
 
             _ => Some(Err(LexError::new(
                 LexErrorKind::InvalidChar(c),

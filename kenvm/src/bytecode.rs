@@ -21,6 +21,7 @@ enum OpCode {
     Sub,
     Mul,
     Div,
+    Rem,
 
     Eq,
     Lt,
@@ -58,20 +59,21 @@ impl OpCode {
             7 => Some(Self::Sub),
             8 => Some(Self::Mul),
             9 => Some(Self::Div),
-            10 => Some(Self::Eq),
-            11 => Some(Self::Lt),
-            12 => Some(Self::Le),
-            13 => Some(Self::Call),
-            14 => Some(Self::AddLocal),
-            15 => Some(Self::AddGlobal),
-            16 => Some(Self::Load),
-            17 => Some(Self::Store),
-            18 => Some(Self::Restore),
-            19 => Some(Self::LoadGlobal),
-            20 => Some(Self::StoreGlobal),
-            21 => Some(Self::Jmp),
-            22 => Some(Self::JmpUnless),
-            23 => Some(Self::Ret),
+            10 => Some(Self::Rem),
+            11 => Some(Self::Eq),
+            12 => Some(Self::Lt),
+            13 => Some(Self::Le),
+            14 => Some(Self::Call),
+            15 => Some(Self::AddLocal),
+            16 => Some(Self::AddGlobal),
+            17 => Some(Self::Load),
+            18 => Some(Self::Store),
+            19 => Some(Self::Restore),
+            20 => Some(Self::LoadGlobal),
+            21 => Some(Self::StoreGlobal),
+            22 => Some(Self::Jmp),
+            23 => Some(Self::JmpUnless),
+            24 => Some(Self::Ret),
             _ => None,
         }
     }
@@ -93,6 +95,7 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    Rem,
 
     Eq,
     Lt,
@@ -130,6 +133,7 @@ impl Op {
             Self::Sub => OpCode::Sub,
             Self::Mul => OpCode::Mul,
             Self::Div => OpCode::Div,
+            Self::Rem => OpCode::Rem,
             Self::Eq => OpCode::Eq,
             Self::Lt => OpCode::Lt,
             Self::Le => OpCode::Le,
@@ -367,6 +371,7 @@ impl<'a> OpStream<'a> {
             OpCode::Sub => Op::Sub,
             OpCode::Mul => Op::Mul,
             OpCode::Div => Op::Div,
+            OpCode::Rem => Op::Rem,
             OpCode::Eq => Op::Eq,
             OpCode::Lt => Op::Lt,
             OpCode::Le => Op::Le,
@@ -416,7 +421,7 @@ impl Iterator for OpStream<'_> {
 impl Display for OpStream<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (ip, op) in *self {
-            writeln!(f, "{ip}: {op}")?;
+            writeln!(f, "{ip}:\t\t{op}")?;
         }
         Ok(())
     }
@@ -442,6 +447,7 @@ impl Display for Op {
             Self::Sub => write!(f, "sub"),
             Self::Mul => write!(f, "mul"),
             Self::Div => write!(f, "div"),
+            Self::Rem => write!(f, "rem"),
             Self::Eq => write!(f, "eq"),
             Self::Lt => write!(f, "lt"),
             Self::Le => write!(f, "le"),

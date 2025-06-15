@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::io::Read;
 
-use codespan_reporting::files::{Files, SimpleFile};
+use codespan_reporting::files::SimpleFile;
 use kenc::CompileError;
 use kenc::codegen::{Codegen, GlobalMap};
 use kenc::lexer::Lexer;
@@ -18,6 +18,8 @@ pub struct Driver {
     repl:       bool,
     max_errors: usize,
     quiet:      bool,
+    vm:         Vm,
+    global:     GlobalMap,
 }
 
 impl Default for Driver {
@@ -61,10 +63,12 @@ impl Driver {
             repl,
             quiet: cfg.quiet,
             max_errors: cfg.max_errors,
+            vm: Vm::default(),
+            global: GlobalMap::default(),
         }
     }
 
-    pub fn run(self) {
+    pub fn run(mut self) {
         if self.repl {
             let _ = self.repl();
         } else {
@@ -72,27 +76,25 @@ impl Driver {
         }
     }
 
-    fn file(&self) {
-        let function = match self.compile(self.file.source()) {
+    fn file(&mut self) {
+        let function = match self.compile() {
             Ok(f) => f,
             Err(err) => {
-                self.report_compile_error(&self.file, err);
+                self.report_compile_error(err);
                 return;
             }
         };
-        let mut vm = Vm::new();
 
-        match vm.eval(&function) {
+        match self.vm.eval(&function) {
             Ok(_) => {}
             Err(err) => {
-                err.report(&self.file);
+                self.report(&[err]);
             }
         }
     }
 
-    fn report<'a, F, E>(&self, errors: &[E], files: &'a F)
+    fn report<E>(&self, errors: &[E])
     where
-        F: Files<'a, FileId = ()>,
         E: Report,
     {
         if self.quiet {
@@ -100,11 +102,11 @@ impl Driver {
         }
         let mut displayed = 0;
         for e in errors.iter().take(self.max_errors) {
-            e.report(files);
+            e.report(&self.file);
             displayed += 1;
         }
 
-        let mut message = format!("could not compile {}", self.file.name());
+        let mut message = format!("could not run {}", self.file.name());
 
         let _ = message.write_fmt(format_args!(
             " due to {} previous {} ({} emitted)",
@@ -114,34 +116,32 @@ impl Driver {
         ));
 
         let error = SimpleReport::new(message);
-        error.report(files);
+        error.report(&self.file);
     }
 
-    fn report_compile_error(&self, file: &SimpleFile<String, String>, error: CompileError) {
+    fn report_compile_error(&self, error: CompileError) {
         match error {
-            CompileError::Lex(spands) => self.report(&spands, file),
-            CompileError::Parse(spands) => self.report(&spands, file),
-            CompileError::Codegen(err) => self.report(&[err], file),
+            CompileError::Lex(spands) => self.report(&spands),
+            CompileError::Parse(spands) => self.report(&spands),
+            CompileError::Codegen(err) => self.report(&[err]),
         }
     }
 
-    fn compile(&self, input: &str) -> Result<Function, CompileError> {
-        let lexer = Lexer::new(input);
+    fn compile(&mut self) -> Result<Function, CompileError> {
+        let lexer = Lexer::new(self.file.source());
         let tokens = lexer.lex_all()?;
 
         let mut parser = Parser::new(tokens);
         let ast = parser.parse_all()?;
 
-        let mut global = GlobalMap::default();
-        let mut code = Codegen::new("", 0, &mut global);
+        let mut code = Codegen::new("", 0, &mut self.global);
         for stmt in ast {
             code.compile_stmt(stmt)?;
         }
         Ok(code.finish())
     }
 
-    fn repl(&self) -> std::io::Result<()> {
-        let mut vm = Vm::new();
+    fn repl(&mut self) -> std::io::Result<()> {
         let mut editor = Editor::default();
         loop {
             let signal = editor.read()?;
@@ -150,21 +150,20 @@ impl Driver {
                 EditorRead::Break => break,
                 EditorRead::Continue => continue,
             };
+            self.file = SimpleFile::new("<stdin>".to_string(), input);
 
-            let function = match self.compile(&input) {
+            let function = match self.compile() {
                 Ok(f) => f,
                 Err(err) => {
-                    let file = SimpleFile::new("<stdin>".to_string(), input);
-                    self.report_compile_error(&file, err);
+                    self.report_compile_error(err);
                     continue;
                 }
             };
 
-            match vm.eval(&function) {
+            match self.vm.eval(&function) {
                 Ok(ret) => println!("{ret}"),
                 Err(err) => {
-                    let file = SimpleFile::new("<stdin>".to_string(), input);
-                    err.report(&file);
+                    self.report(&[err]);
                 }
             }
         }
