@@ -30,8 +30,8 @@ impl Default for GlobalMap {
         let strings = globals.keys().cloned().collect();
         Self {
             globals,
-            current,
             strings,
+            current,
         }
     }
 }

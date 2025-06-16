@@ -39,6 +39,7 @@ pub enum EditorRead {
     Continue,
 }
 
+#[derive(Clone, Copy)]
 struct Delim {
     opening: char,
     closing: char,

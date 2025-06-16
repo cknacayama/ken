@@ -62,6 +62,7 @@ impl<'a> TokenKind<'a> {
         matches!(self, Self::KwFn | Self::KwLet)
     }
 
+    #[must_use]
     pub const fn can_recover(&self) -> bool {
         matches!(self, Self::KwFn | Self::KwLet)
     }
