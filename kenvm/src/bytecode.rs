@@ -6,7 +6,7 @@ use crate::value::Value;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum OpCode {
+pub(crate) enum OpCode {
     Nop,
 
     Pop,
@@ -79,44 +79,161 @@ impl OpCode {
     }
 }
 
+/// Representation of bytecode instructions.
+///
+/// `Op` can be used for building a [Chunk].
+/// `Op` is not the internal representation of
+/// the bytecode.
+///
+/// # Errors
+///
+/// The evaluation of an instruction
+/// will return `Err` if there are any type
+/// mismatches.
 #[derive(Debug, Clone, Copy)]
 pub enum Op {
+    /// No operation.
     Nop,
 
+    /// Pop [Value] from stack.
     Pop,
+
+    /// Push [Value] into stack.
     Push(usize),
 
+    /// Push `u32` into stack.
     PushInt(u32),
 
+    /// Pop [Value] from stack
+    /// and try to negate it.
+    ///
+    /// The result is pushed back
+    /// into  the stack.
     Neg,
+
+    /// Pop [Value] from stack
+    /// and try to 'not' it.
+    ///
+    /// The result is pushed back
+    /// into  the stack.
     Not,
 
+    /// Pop two [Value]'s from stack
+    /// and try to add them.
+    ///
+    /// The result is pushed back
+    /// into  the stack.
     Add,
+
+    /// Pop two [Value]'s from stack
+    /// and try to subtract them.
+    ///
+    /// The result is pushed back
+    /// into  the stack.
     Sub,
+
+    /// Pop two [Value]'s from stack
+    /// and try to multiply them.
+    ///
+    /// The result is pushed back
+    /// into  the stack.
     Mul,
+
+    /// Pop two [Value]'s from stack
+    /// and try to divide them.
+    ///
+    /// The result is pushed back
+    /// into  the stack.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if first element
+    /// on the stack is `0`.
     Div,
+
+    /// Pop two [Value]'s from stack
+    /// and try to take the remainder of them.
+    ///
+    /// The result is pushed back
+    /// into  the stack.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if first element
+    /// on the stack is `0`.
     Rem,
 
+    /// Pop two [Value]'s from stack
+    /// and try to check equality on them.
+    ///
+    /// The result of type `Bool` is pushed back
+    /// into  the stack.
     Eq,
+
+    /// Pop two [Value]'s from stack
+    /// and try to check if lhs is less than rhs.
+    ///
+    /// The result of type `Bool` is pushed back
+    /// into  the stack.
     Lt,
+
+    /// Pop two [Value]'s from stack
+    /// and try to check if lhs is less than or equal to rhs.
+    ///
+    /// The result of type `Bool` is pushed back
+    /// into  the stack.
     Le,
 
+    /// Pop callee and
+    /// arguments from stack and tries
+    /// to call callee.
+    ///
+    /// The returned value is pushed back
+    /// into  the stack.
     Call(u8),
 
+    /// Pop [Value] from stack
+    /// and push it into local variables
+    /// stack.
     AddLocal,
+
+    /// Pop [Value] from stack
+    /// and push it into global variables
+    /// stack.
     AddGlobal,
 
+    /// Reads a [Value] from local variables stack and
+    /// pushes it into the stack.
     Load(usize),
+
+    /// Pop [Value] from stack
+    /// and store it into local variables
+    /// stack at a certain position.
     Store(usize),
 
+    /// Pop n [Value]'s from local
+    /// variables stack.
     Restore(usize),
 
+    /// Reads a [Value] from global variables stack and
+    /// pushes it into the stack.
     LoadGlobal(usize),
+
+    /// Pop [Value] from stack
+    /// and store it into global variables
+    /// stack at a certain position.
     StoreGlobal(usize),
 
+    /// Jump to instruction.
     Jmp(usize),
+
+    /// Pop [Value] from stack
+    /// and jump to instruction
+    /// if the `Value` is `true`.
     JmpUnless(usize),
 
+    /// Pop [Value] from stack
+    /// and returns it.
     Ret,
 }
 
@@ -295,8 +412,8 @@ pub struct Chunk {
 
 impl Chunk {
     #[must_use]
-    fn fetch_span(&self, at: usize) -> Span {
-        self.spans.get(at).copied().unwrap_or_default()
+    fn fetch_span(&self, at: usize) -> Option<Span> {
+        self.spans.get(at).copied()
     }
 
     #[inline]
@@ -312,90 +429,62 @@ pub struct OpStream<'a> {
     ip:    usize,
 }
 
-impl<'a> OpStream<'a> {
+pub(crate) trait Fetch<T> {
     #[must_use]
-    pub const fn new(chunk: &'a Chunk) -> Self {
-        Self { chunk, ip: 0 }
-    }
+    fn fetch(&mut self) -> Option<T>;
+}
 
-    #[must_use]
-    pub(crate) fn fetch_span(&self) -> Span {
-        self.chunk.fetch_span(self.ip - 1)
-    }
-
+impl Fetch<u8> for OpStream<'_> {
     #[inline]
-    #[must_use]
-    fn fetch_u8(&mut self) -> Option<u8> {
+    fn fetch(&mut self) -> Option<u8> {
         let byte = self.chunk.ops.get(self.ip).copied()?;
         self.ip += 1;
         Some(byte)
     }
+}
 
+impl Fetch<u32> for OpStream<'_> {
     #[inline]
-    #[must_use]
-    fn fetch_u32(&mut self) -> Option<u32> {
-        let word = {
-            let this = &self.chunk;
-            let at = self.ip;
-            let slice = this.ops.get(at..at + size_of::<u32>())?;
-            let bytes = slice.try_into().unwrap();
-            Some(u32::from_ne_bytes(bytes))
-        }?;
+    fn fetch(&mut self) -> Option<u32> {
+        let at = self.ip;
+        let slice = self.chunk.ops.get(at..at + size_of::<u32>())?;
+        let bytes = slice.try_into().unwrap();
+        let word = u32::from_ne_bytes(bytes);
         self.ip += size_of::<u32>();
         Some(word)
     }
+}
 
+impl Fetch<usize> for OpStream<'_> {
     #[inline]
-    #[must_use]
-    fn fetch_arg(&mut self, ctor: impl FnOnce(usize) -> Op) -> Option<Op> {
+    fn fetch(&mut self) -> Option<usize> {
         let at = self.ip;
         let slice = self.chunk.ops.get(at..at + size_of::<usize>())?;
         let bytes = slice.try_into().unwrap();
-        let arg = usize::from_ne_bytes(bytes);
+        let word = usize::from_ne_bytes(bytes);
         self.ip += size_of::<usize>();
-        Some(ctor(arg))
+        Some(word)
     }
+}
 
+impl Fetch<OpCode> for OpStream<'_> {
     #[inline]
+    fn fetch(&mut self) -> Option<OpCode> {
+        Fetch::<u8>::fetch(self).and_then(OpCode::decode)
+    }
+}
+
+impl Fetch<Span> for OpStream<'_> {
+    #[inline]
+    fn fetch(&mut self) -> Option<Span> {
+        self.chunk.fetch_span(self.ip - 1)
+    }
+}
+
+impl<'a> OpStream<'a> {
     #[must_use]
-    pub(crate) fn fetch(&mut self) -> Option<Op> {
-        let code = self.fetch_u8().and_then(OpCode::decode)?;
-
-        let op = match code {
-            OpCode::Nop => Op::Nop,
-            OpCode::Pop => Op::Pop,
-            OpCode::Push => self.fetch_arg(Op::Push)?,
-            OpCode::Neg => Op::Neg,
-            OpCode::Not => Op::Not,
-            OpCode::Add => Op::Add,
-            OpCode::Sub => Op::Sub,
-            OpCode::Mul => Op::Mul,
-            OpCode::Div => Op::Div,
-            OpCode::Rem => Op::Rem,
-            OpCode::Eq => Op::Eq,
-            OpCode::Lt => Op::Lt,
-            OpCode::Le => Op::Le,
-            OpCode::Call => {
-                let arg = self.fetch_u8()?;
-                Op::Call(arg)
-            }
-            OpCode::PushInt => {
-                let arg = self.fetch_u32()?;
-                Op::PushInt(arg)
-            }
-            OpCode::AddLocal => Op::AddLocal,
-            OpCode::AddGlobal => Op::AddGlobal,
-            OpCode::Load => self.fetch_arg(Op::Load)?,
-            OpCode::Store => self.fetch_arg(Op::Store)?,
-            OpCode::Restore => self.fetch_arg(Op::Restore)?,
-            OpCode::LoadGlobal => self.fetch_arg(Op::LoadGlobal)?,
-            OpCode::StoreGlobal => self.fetch_arg(Op::StoreGlobal)?,
-            OpCode::Jmp => self.fetch_arg(Op::Jmp)?,
-            OpCode::JmpUnless => self.fetch_arg(Op::JmpUnless)?,
-            OpCode::Ret => Op::Ret,
-        };
-
-        Some(op)
+    pub const fn new(chunk: &'a Chunk) -> Self {
+        Self { chunk, ip: 0 }
     }
 
     #[must_use]
@@ -406,31 +495,6 @@ impl<'a> OpStream<'a> {
     #[inline]
     pub(crate) const fn jump(&mut self, to: usize) {
         self.ip = to;
-    }
-}
-
-impl Iterator for OpStream<'_> {
-    type Item = (usize, Op);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ip = self.ip;
-        self.fetch().map(|op| (ip, op))
-    }
-}
-
-impl Display for OpStream<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (ip, op) in *self {
-            writeln!(f, "{ip}:\t\t{op}")?;
-        }
-        Ok(())
-    }
-}
-
-impl Display for Chunk {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let stream = OpStream::new(self);
-        Display::fmt(&stream, f)
     }
 }
 
