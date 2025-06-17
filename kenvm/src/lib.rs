@@ -148,14 +148,13 @@ impl Vm {
         self.stack.push(value);
     }
 
-    fn grab_args(&mut self, count: u8) -> RuntimeResult<Vec<Value>> {
-        let count = usize::from(count);
-        if self.sp() < count {
+    fn drain(&mut self, len: usize) -> RuntimeResult<Vec<Value>> {
+        if self.sp() < len {
             return Err(RuntimeError::StackUnderflow);
         }
-        let mut args = Vec::with_capacity(count);
-        args.extend(self.stack.drain(self.stack.len() - count..));
-        Ok(args)
+        let mut values = Vec::with_capacity(len);
+        values.extend(self.stack.drain(self.stack.len() - len..));
+        Ok(values)
     }
 
     fn prefix_op(
@@ -178,6 +177,41 @@ impl Vm {
         let value = op(lhs, rhs)?;
         self.push_stack(value);
         Ok(Status::Running)
+    }
+
+    #[inline]
+    fn load_idx(&mut self) -> RuntimeResult<Status> {
+        let idx = self.pop_stack()?;
+        let indexed = self.pop_stack()?;
+        match (indexed, idx) {
+            (Value::MutObj(obj), Value::Int(idx)) => {
+                let idx = usize::try_from(idx).map_err(|_| RuntimeError::OutOfBounds)?;
+                let list = obj.as_list()?;
+                let item = list.get(idx).ok_or(RuntimeError::OutOfBounds)?;
+                self.push_stack(item.clone());
+
+                Ok(Status::Running)
+            }
+            _ => Err(RuntimeError::TypeError),
+        }
+    }
+
+    #[inline]
+    fn store_idx(&mut self) -> RuntimeResult<Status> {
+        let idx = self.pop_stack()?;
+        let indexed = self.pop_stack()?;
+        let value = self.pop_stack()?;
+        match (indexed, idx) {
+            (Value::MutObj(obj), Value::Int(idx)) => {
+                let idx = usize::try_from(idx).map_err(|_| RuntimeError::OutOfBounds)?;
+                let mut list = obj.as_list_mut()?;
+                let item = list.get_mut(idx).ok_or(RuntimeError::OutOfBounds)?;
+                *item = value;
+
+                Ok(Status::Running)
+            }
+            _ => Err(RuntimeError::TypeError),
+        }
     }
 
     #[inline]
@@ -205,6 +239,22 @@ impl Vm {
                 Ok(Status::Running)
             }
 
+            OpCode::MakeList => {
+                let len = frame.fetch()?;
+                let values = self.drain(len)?;
+                let list = Value::from(values);
+                self.push_stack(list);
+                Ok(Status::Running)
+            }
+
+            OpCode::MakeTuple => {
+                let len = frame.fetch()?;
+                let values = self.drain(len)?;
+                let list = Value::from(values.into_boxed_slice());
+                self.push_stack(list);
+                Ok(Status::Running)
+            }
+
             OpCode::Add => self.infix_op(|a, b| a + b).map_err(FrameError::from),
             OpCode::Sub => self.infix_op(|a, b| a - b).map_err(FrameError::from),
             OpCode::Mul => self.infix_op(|a, b| a * b).map_err(FrameError::from),
@@ -226,9 +276,9 @@ impl Vm {
             OpCode::Le => self.infix_op(try_le).map_err(FrameError::from),
 
             OpCode::Call => {
-                let count = frame.fetch()?;
+                let count = frame.fetch::<u8>()?;
+                let args = self.drain(count as usize)?;
                 let value = self.pop_stack()?;
-                let args = self.grab_args(count)?;
 
                 match value.as_obj()?.as_ref() {
                     Obj::Function(function) => {
@@ -259,6 +309,8 @@ impl Vm {
                 self.global.push(value);
                 Ok(Status::Running)
             }
+            OpCode::LoadIdx => self.load_idx().map_err(FrameError::from),
+            OpCode::StoreIdx => self.store_idx().map_err(FrameError::from),
             OpCode::Load => {
                 let at = frame.fetch::<usize>()?;
                 let value = self
@@ -305,7 +357,7 @@ impl Vm {
                 frame.jump(ip);
                 Ok(Status::Running)
             }
-            OpCode::JmpUnless => {
+            OpCode::JmpIfNot => {
                 let ip = frame.fetch::<usize>()?;
                 let cond: bool = self.pop_stack()?.try_into()?;
                 if !cond {
@@ -323,6 +375,8 @@ impl Vm {
 
 #[derive(thiserror::Error, Debug, Clone, Copy)]
 pub enum RuntimeError {
+    #[error("out of bounds access")]
+    OutOfBounds,
     #[error("division by zero")]
     DivisionByZero,
     #[error("type error")]

@@ -14,6 +14,9 @@ pub(crate) enum OpCode {
 
     PushInt,
 
+    MakeList,
+    MakeTuple,
+
     Neg,
     Not,
 
@@ -32,6 +35,9 @@ pub(crate) enum OpCode {
     AddLocal,
     AddGlobal,
 
+    LoadIdx,
+    StoreIdx,
+
     Load,
     Store,
 
@@ -41,7 +47,7 @@ pub(crate) enum OpCode {
     StoreGlobal,
 
     Jmp,
-    JmpUnless,
+    JmpIfNot,
 
     Ret,
 }
@@ -53,27 +59,31 @@ impl OpCode {
             1 => Some(Self::Pop),
             2 => Some(Self::Push),
             3 => Some(Self::PushInt),
-            4 => Some(Self::Neg),
-            5 => Some(Self::Not),
-            6 => Some(Self::Add),
-            7 => Some(Self::Sub),
-            8 => Some(Self::Mul),
-            9 => Some(Self::Div),
-            10 => Some(Self::Rem),
-            11 => Some(Self::Eq),
-            12 => Some(Self::Lt),
-            13 => Some(Self::Le),
-            14 => Some(Self::Call),
-            15 => Some(Self::AddLocal),
-            16 => Some(Self::AddGlobal),
-            17 => Some(Self::Load),
-            18 => Some(Self::Store),
-            19 => Some(Self::Restore),
-            20 => Some(Self::LoadGlobal),
-            21 => Some(Self::StoreGlobal),
-            22 => Some(Self::Jmp),
-            23 => Some(Self::JmpUnless),
-            24 => Some(Self::Ret),
+            4 => Some(Self::MakeList),
+            5 => Some(Self::MakeTuple),
+            6 => Some(Self::Neg),
+            7 => Some(Self::Not),
+            8 => Some(Self::Add),
+            9 => Some(Self::Sub),
+            10 => Some(Self::Mul),
+            11 => Some(Self::Div),
+            12 => Some(Self::Rem),
+            13 => Some(Self::Eq),
+            14 => Some(Self::Lt),
+            15 => Some(Self::Le),
+            16 => Some(Self::Call),
+            17 => Some(Self::AddLocal),
+            18 => Some(Self::AddGlobal),
+            19 => Some(Self::LoadIdx),
+            20 => Some(Self::StoreIdx),
+            21 => Some(Self::Load),
+            22 => Some(Self::Store),
+            23 => Some(Self::Restore),
+            24 => Some(Self::LoadGlobal),
+            25 => Some(Self::StoreGlobal),
+            26 => Some(Self::Jmp),
+            27 => Some(Self::JmpIfNot),
+            28 => Some(Self::Ret),
             _ => None,
         }
     }
@@ -92,148 +102,48 @@ impl OpCode {
 /// mismatches.
 #[derive(Debug, Clone, Copy)]
 pub enum Op {
-    /// No operation.
     Nop,
 
-    /// Pop [Value] from stack.
     Pop,
-
-    /// Push [Value] into stack.
     Push(usize),
-
-    /// Push `u32` into stack.
     PushInt(u32),
 
-    /// Pop [Value] from stack
-    /// and try to negate it.
-    ///
-    /// The result is pushed back
-    /// into  the stack.
-    Neg,
+    MakeList(usize),
+    MakeTuple(usize),
 
-    /// Pop [Value] from stack
-    /// and try to 'not' it.
-    ///
-    /// The result is pushed back
-    /// into  the stack.
+    Neg,
     Not,
 
-    /// Pop two [Value]'s from stack
-    /// and try to add them.
-    ///
-    /// The result is pushed back
-    /// into  the stack.
     Add,
-
-    /// Pop two [Value]'s from stack
-    /// and try to subtract them.
-    ///
-    /// The result is pushed back
-    /// into  the stack.
     Sub,
-
-    /// Pop two [Value]'s from stack
-    /// and try to multiply them.
-    ///
-    /// The result is pushed back
-    /// into  the stack.
     Mul,
-
-    /// Pop two [Value]'s from stack
-    /// and try to divide them.
-    ///
-    /// The result is pushed back
-    /// into  the stack.
-    ///
-    /// # Errors
-    ///
-    /// Will return `Err` if first element
-    /// on the stack is `0`.
     Div,
-
-    /// Pop two [Value]'s from stack
-    /// and try to take the remainder of them.
-    ///
-    /// The result is pushed back
-    /// into  the stack.
-    ///
-    /// # Errors
-    ///
-    /// Will return `Err` if first element
-    /// on the stack is `0`.
     Rem,
 
-    /// Pop two [Value]'s from stack
-    /// and try to check equality on them.
-    ///
-    /// The result of type `Bool` is pushed back
-    /// into  the stack.
     Eq,
 
-    /// Pop two [Value]'s from stack
-    /// and try to check if lhs is less than rhs.
-    ///
-    /// The result of type `Bool` is pushed back
-    /// into  the stack.
     Lt,
-
-    /// Pop two [Value]'s from stack
-    /// and try to check if lhs is less than or equal to rhs.
-    ///
-    /// The result of type `Bool` is pushed back
-    /// into  the stack.
     Le,
 
-    /// Pop callee and
-    /// arguments from stack and tries
-    /// to call callee.
-    ///
-    /// The returned value is pushed back
-    /// into  the stack.
     Call(u8),
 
-    /// Pop [Value] from stack
-    /// and push it into local variables
-    /// stack.
     AddLocal,
-
-    /// Pop [Value] from stack
-    /// and push it into global variables
-    /// stack.
     AddGlobal,
 
-    /// Reads a [Value] from local variables stack and
-    /// pushes it into the stack.
-    Load(usize),
+    LoadIdx,
+    StoreIdx,
 
-    /// Pop [Value] from stack
-    /// and store it into local variables
-    /// stack at a certain position.
+    Load(usize),
     Store(usize),
 
-    /// Pop n [Value]'s from local
-    /// variables stack.
     Restore(usize),
 
-    /// Reads a [Value] from global variables stack and
-    /// pushes it into the stack.
     LoadGlobal(usize),
-
-    /// Pop [Value] from stack
-    /// and store it into global variables
-    /// stack at a certain position.
     StoreGlobal(usize),
 
-    /// Jump to instruction.
     Jmp(usize),
+    JmpIfNot(usize),
 
-    /// Pop [Value] from stack
-    /// and jump to instruction
-    /// if the `Value` is `true`.
-    JmpUnless(usize),
-
-    /// Pop [Value] from stack
-    /// and returns it.
     Ret,
 }
 
@@ -244,6 +154,8 @@ impl Op {
             Self::Pop => OpCode::Pop,
             Self::Push(_) => OpCode::Push,
             Self::PushInt(_) => OpCode::PushInt,
+            Self::MakeList(_) => OpCode::MakeList,
+            Self::MakeTuple(_) => OpCode::MakeTuple,
             Self::Neg => OpCode::Neg,
             Self::Not => OpCode::Not,
             Self::Add => OpCode::Add,
@@ -257,13 +169,15 @@ impl Op {
             Self::Call(_) => OpCode::Call,
             Self::AddLocal => OpCode::AddLocal,
             Self::AddGlobal => OpCode::AddGlobal,
+            Self::LoadIdx => OpCode::LoadIdx,
+            Self::StoreIdx => OpCode::StoreIdx,
             Self::Load(_) => OpCode::Load,
             Self::Store(_) => OpCode::Store,
             Self::Restore(_) => OpCode::Restore,
             Self::LoadGlobal(_) => OpCode::LoadGlobal,
             Self::StoreGlobal(_) => OpCode::StoreGlobal,
             Self::Jmp(_) => OpCode::Jmp,
-            Self::JmpUnless(_) => OpCode::JmpUnless,
+            Self::JmpIfNot(_) => OpCode::JmpIfNot,
             Self::Ret => OpCode::Ret,
         }
     }
@@ -282,14 +196,16 @@ impl Op {
                 }
                 chunk
             }
-            Self::Push(arg)
+            Self::MakeList(arg)
+            | Self::MakeTuple(arg)
+            | Self::Push(arg)
             | Self::Load(arg)
             | Self::Store(arg)
             | Self::Restore(arg)
             | Self::LoadGlobal(arg)
             | Self::StoreGlobal(arg)
             | Self::Jmp(arg)
-            | Self::JmpUnless(arg) => {
+            | Self::JmpIfNot(arg) => {
                 let mut chunk = ChunkBuffer::new();
                 for b in arg.to_ne_bytes() {
                     chunk.push(b);
@@ -365,7 +281,7 @@ impl ChunkBuilder {
     #[must_use]
     pub fn update_jmp(&mut self, at: usize, new: usize) -> Option<usize> {
         let code = self.ops.get(at).copied().and_then(OpCode::decode)?;
-        if matches!(code, OpCode::Jmp | OpCode::JmpUnless) {
+        if matches!(code, OpCode::Jmp | OpCode::JmpIfNot) {
             let slice = self.ops.get_mut(at + 1..at + 9)?;
             let old = usize::from_ne_bytes(slice.try_into().unwrap());
             for (new, old) in new.to_ne_bytes().into_iter().zip(slice) {
@@ -411,6 +327,14 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    pub const fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     #[must_use]
     fn fetch_span(&self, at: usize) -> Option<Span> {
         self.spans.get(at).copied()
@@ -481,6 +405,43 @@ impl Fetch<Span> for OpStream<'_> {
     }
 }
 
+impl Fetch<Op> for OpStream<'_> {
+    fn fetch(&mut self) -> Option<Op> {
+        let op = self.fetch()?;
+        match op {
+            OpCode::Nop => Some(Op::Nop),
+            OpCode::Pop => Some(Op::Pop),
+            OpCode::Push => self.fetch().map(Op::Push),
+            OpCode::PushInt => self.fetch().map(Op::PushInt),
+            OpCode::MakeList => self.fetch().map(Op::MakeList),
+            OpCode::MakeTuple => self.fetch().map(Op::MakeTuple),
+            OpCode::Neg => Some(Op::Neg),
+            OpCode::Not => Some(Op::Not),
+            OpCode::Add => Some(Op::Add),
+            OpCode::Sub => Some(Op::Sub),
+            OpCode::Mul => Some(Op::Mul),
+            OpCode::Div => Some(Op::Div),
+            OpCode::Rem => Some(Op::Rem),
+            OpCode::Eq => Some(Op::Eq),
+            OpCode::Lt => Some(Op::Lt),
+            OpCode::Le => Some(Op::Le),
+            OpCode::Call => self.fetch().map(Op::Call),
+            OpCode::AddLocal => Some(Op::AddLocal),
+            OpCode::AddGlobal => Some(Op::AddGlobal),
+            OpCode::LoadIdx => Some(Op::LoadIdx),
+            OpCode::StoreIdx => Some(Op::StoreIdx),
+            OpCode::Load => self.fetch().map(Op::Load),
+            OpCode::Store => self.fetch().map(Op::Store),
+            OpCode::Restore => self.fetch().map(Op::Restore),
+            OpCode::LoadGlobal => self.fetch().map(Op::LoadGlobal),
+            OpCode::StoreGlobal => self.fetch().map(Op::StoreGlobal),
+            OpCode::Jmp => self.fetch().map(Op::Jmp),
+            OpCode::JmpIfNot => self.fetch().map(Op::JmpIfNot),
+            OpCode::Ret => Some(Op::Ret),
+        }
+    }
+}
+
 impl<'a> OpStream<'a> {
     #[must_use]
     pub const fn new(chunk: &'a Chunk) -> Self {
@@ -498,35 +459,26 @@ impl<'a> OpStream<'a> {
     }
 }
 
-impl Display for Op {
+impl Display for OpStream<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Nop => write!(f, "nop"),
-            Self::Pop => write!(f, "pop"),
-            Self::Push(arg) => write!(f, "push {arg}"),
-            Self::PushInt(arg) => write!(f, "push_int {arg}"),
-            Self::Neg => write!(f, "neg"),
-            Self::Not => write!(f, "not"),
-            Self::Add => write!(f, "add"),
-            Self::Sub => write!(f, "sub"),
-            Self::Mul => write!(f, "mul"),
-            Self::Div => write!(f, "div"),
-            Self::Rem => write!(f, "rem"),
-            Self::Eq => write!(f, "eq"),
-            Self::Lt => write!(f, "lt"),
-            Self::Le => write!(f, "le"),
-            Self::Call(arg) => write!(f, "call {arg}"),
-            Self::AddLocal => write!(f, "add_local"),
-            Self::AddGlobal => write!(f, "add_global"),
-            Self::Load(arg) => write!(f, "load {arg}"),
-            Self::Store(arg) => write!(f, "store {arg}"),
-            Self::Restore(arg) => write!(f, "restore {arg}"),
-            Self::LoadGlobal(arg) => write!(f, "load_global {arg}"),
-            Self::StoreGlobal(arg) => write!(f, "store_global {arg}"),
-            Self::Jmp(arg) => write!(f, "jmp {arg}"),
-            Self::JmpUnless(arg) => write!(f, "jmp_unless {arg}"),
-            Self::Ret => write!(f, "ret"),
+        if self.chunk.is_empty() {
+            return Ok(());
         }
+        let max = self.chunk.len().ilog10() as usize + 1;
+        let mut stream = *self;
+        let mut ip = stream.ip;
+        while let Some(op) = <Self as Fetch<Op>>::fetch(&mut stream) {
+            writeln!(f, "    {:<max$}    {op:?}", ip)?;
+            ip = stream.ip;
+        }
+        Ok(())
+    }
+}
+
+impl Display for Chunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stream = OpStream::new(self);
+        Display::fmt(&stream, f)
     }
 }
 

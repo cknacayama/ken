@@ -140,7 +140,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             .find_map(|scope| scope.get(name).copied())
     }
 
-    fn redact_jmp(&mut self, i: usize, new: usize) -> usize {
+    fn update_jmp(&mut self, i: usize, new: usize) -> usize {
         self.chunk.update_jmp(i, new).unwrap()
     }
 
@@ -162,6 +162,8 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     pub fn finish(mut self) -> Function {
         self.push_ret();
         let chunk = self.chunk.finish();
+        // println!("<fn {}>:", self.name);
+        // print!("{chunk}");
         Function::new(self.arity, chunk)
     }
 
@@ -208,6 +210,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
 
     pub fn compile_expr(&mut self, Expr { kind, span }: Expr<'a>) -> CodegenResult<GenSpan> {
         match kind {
+            ExprKind::Unit => Ok(self.push_unit(span)),
             ExprKind::Ident(id) => self.compile_ident_expr(id, span),
             ExprKind::Float(n) => Ok(self.compile_float_expr(n, span)),
             ExprKind::Integer(n) => Ok(self.compile_int_expr(n, span)),
@@ -222,6 +225,9 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             ExprKind::Block(block) => self.compile_block(block),
             ExprKind::If { cond, then, els } => self.compile_if(*cond, then, els, span),
             ExprKind::Call { callee, args } => self.compile_call(*callee, args, span),
+            ExprKind::While { cond, body } => self.compile_while(*cond, body, span),
+            ExprKind::List { tuple, items } => self.compile_list(tuple, items, span),
+            ExprKind::Idx { expr, idx } => self.compile_idx(*expr, *idx, span),
         }
     }
 
@@ -265,6 +271,50 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         Ok(bind.join(end))
     }
 
+    fn compile_idx(&mut self, expr: Expr<'a>, idx: Expr<'a>, span: Span) -> CodegenResult<GenSpan> {
+        let expr = self.compile_expr(expr)?;
+        self.compile_expr(idx)?;
+        let end = self.push_op(Op::LoadIdx, span);
+        self.stack -= 1;
+        Ok(expr.join(end))
+    }
+
+    fn compile_list(
+        &mut self,
+        tuple: bool,
+        items: Box<[Expr<'a>]>,
+        span: Span,
+    ) -> CodegenResult<GenSpan> {
+        let len = items.len();
+        let items = self.compile_many(items, Self::compile_expr)?;
+        self.stack -= len;
+        let end = if tuple {
+            self.push_op(Op::MakeTuple(len), span)
+        } else {
+            self.push_op(Op::MakeList(len), span)
+        };
+        self.stack += 1;
+        Ok(items.map_or(end, |items| items.join(end)))
+    }
+
+    fn compile_while(
+        &mut self,
+        cond: Expr<'a>,
+        body: Block<'a>,
+        span: Span,
+    ) -> CodegenResult<GenSpan> {
+        let cond = self.compile_expr(cond)?;
+        let jmp = self.push_op(Op::JmpIfNot(0), span);
+        self.stack -= 1;
+        self.compile_block(body)?;
+        self.push_op(Op::Pop, span);
+        self.stack -= 1;
+        self.push_op(Op::Jmp(cond.start), span);
+        let end = self.push_unit(span);
+        self.update_jmp(jmp.start, end.start);
+        Ok(cond.join(end))
+    }
+
     fn compile_if(
         &mut self,
         cond: Expr<'a>,
@@ -273,7 +323,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         span: Span,
     ) -> CodegenResult<GenSpan> {
         let cond = self.compile_expr(cond)?;
-        let jmp = self.push_op(Op::JmpUnless(0), span);
+        let jmp = self.push_op(Op::JmpIfNot(0), span);
         self.stack -= 1;
 
         self.compile_block(then)?;
@@ -283,8 +333,8 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         let els = self.compile_block(els)?;
         let end = els.end + 1;
 
-        self.redact_jmp(jmp.start, els.start);
-        self.redact_jmp(jmp_end.start, end);
+        self.update_jmp(jmp.start, els.start);
+        self.update_jmp(jmp_end.start, end);
 
         Ok(cond.join(els))
     }
@@ -295,15 +345,16 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         args: Box<[Expr<'a>]>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
+        let callee = self.compile_expr(callee)?;
+
         let count = u8::try_from(args.len())
             .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
-        let args = self.compile_many(args, Self::compile_expr)?;
+        self.compile_many(args, Self::compile_expr)?;
 
-        let callee = self.compile_expr(callee)?;
         let end = self.push_op(Op::Call(count), span);
         self.stack -= count as usize;
 
-        let span = args.map_or_else(|| callee.join(end), |args| args.join(end));
+        let span = callee.join(end);
         Ok(span)
     }
 
@@ -355,7 +406,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         Ok(op)
     }
 
-    fn compile_lvalue(
+    fn compile_place(
         &mut self,
         Spand { kind, span: lspan }: Expr<'a>,
         span: Span,
@@ -373,6 +424,13 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
                     ))
                 }
             }
+            ExprKind::Idx { expr, idx } => {
+                let expr = self.compile_expr(*expr)?;
+                self.compile_expr(*idx)?;
+                let end = self.push_op(Op::StoreIdx, span);
+                self.stack -= 2;
+                Ok(expr.join(end))
+            }
             _ => Err(CodegenError::new(CodegenErrorKind::NotAssignable, span)),
         }
     }
@@ -383,10 +441,11 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         rhs: Expr<'a>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
-        let rvalue = self.compile_expr(rhs)?;
-        let lvalue = self.compile_lvalue(lhs, span)?;
+        let value = self.compile_expr(rhs)?;
+        let place = self.compile_place(lhs, span)?;
         self.stack -= 1;
-        Ok(rvalue.join(lvalue))
+        self.push_unit(span);
+        Ok(value.join(place))
     }
 
     fn compile_prefix_expr(

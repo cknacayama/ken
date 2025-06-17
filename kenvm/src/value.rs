@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::ops::{Add, Div, Mul, Neg, Not, Rem, Sub};
 use std::rc::Rc;
 
-use crate::obj::{Function, MutObjRef, Obj, ObjRef};
+use crate::obj::{Function, MutObj, MutObjRef, Obj, ObjRef};
 use crate::{RuntimeError, RuntimeResult};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,12 +42,11 @@ impl Display for Value {
             Self::Int(x) => write!(f, "{x}"),
             Self::Float(x) => write!(f, "{x}"),
             Self::MutObj(obj) => {
-                let ptr = Rc::as_ptr(obj);
-                let obj = obj.borrow();
-                if obj.is_pretty() {
-                    write!(f, "{obj}")
-                } else {
-                    write!(f, "<{obj} at {ptr:?}>")
+                let ptr = obj.as_ptr();
+                match obj.borrow() {
+                    Ok(obj) if obj.is_pretty() => write!(f, "{obj}"),
+                    Ok(obj) => write!(f, "<{obj} at {ptr:?}>"),
+                    Err(_) => write!(f, "<mut obj at {ptr:?}>"),
                 }
             }
             Self::Obj(obj) => {
@@ -118,6 +117,21 @@ macro_rules! value_impl {
                 Self::Obj(Rc::new(obj))
             }
         }
+
+        impl<'a> TryFrom<&'a Value> for &'a $val {
+            type Error = RuntimeError;
+
+            #[inline]
+            fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
+                if let Value::Obj(obj) = value
+                    && let Obj::$variant(obj) = obj.as_ref()
+                {
+                    Ok(obj)
+                } else {
+                    Err(RuntimeError::TypeError)
+                }
+            }
+        }
     };
 }
 
@@ -126,6 +140,17 @@ value_impl!(i64, Int);
 value_impl!(bool, Bool);
 value_impl!(MutObjRef, MutObj);
 value_impl!(Function, obj Function);
+
+impl<T> From<T> for Value
+where
+    MutObj: From<T>,
+{
+    #[inline]
+    fn from(value: T) -> Self {
+        let obj = MutObj::from(value);
+        Self::MutObj(MutObjRef::new(obj))
+    }
+}
 
 infix_impl!(Add::add);
 infix_impl!(Sub::sub);

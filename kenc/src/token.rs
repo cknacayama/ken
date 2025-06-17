@@ -38,6 +38,7 @@ pub enum TokenKind<'a> {
     RBracket,
 
     KwFn,
+    KwWhile,
     KwIf,
     KwElse,
     KwLet,
@@ -50,6 +51,7 @@ impl<'a> TokenKind<'a> {
     pub fn try_kw(s: &'a str) -> Self {
         match s {
             "fn" => TokenKind::KwFn,
+            "while" => TokenKind::KwWhile,
             "if" => TokenKind::KwIf,
             "else" => TokenKind::KwElse,
             "let" => TokenKind::KwLet,
@@ -102,6 +104,7 @@ impl Display for TokenKind<'_> {
             Self::RBracket => write!(f, "]"),
 
             Self::KwFn => write!(f, "fn"),
+            Self::KwWhile => write!(f, "while"),
             Self::KwIf => write!(f, "if"),
             Self::KwElse => write!(f, "else"),
             Self::KwLet => write!(f, "let"),

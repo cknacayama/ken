@@ -338,6 +338,19 @@ impl<'a> Parser<'a> {
                     };
                     expr = Expr::new(kind, span);
                 }
+                Some(Token {
+                    kind: TokenKind::LBracket,
+                    ..
+                }) => {
+                    self.eat();
+                    let idx = self.parse_expr()?;
+                    let span = expr.span.join(self.expect(TokenKind::RBracket)?);
+                    let kind = ExprKind::Idx {
+                        expr: Box::new(expr),
+                        idx:  Box::new(idx),
+                    };
+                    expr = Expr::new(kind, span);
+                }
                 _ => break,
             }
         }
@@ -361,6 +374,16 @@ impl<'a> Parser<'a> {
                 };
                 Ok(Expr::new(kind, span))
             }
+            TokenKind::KwWhile => {
+                let cond = self.parse_expr()?;
+                let body = self.expect_block()?;
+                let span = span.join(body.span);
+                let kind = ExprKind::While {
+                    cond: Box::new(cond),
+                    body,
+                };
+                Ok(Expr::new(kind, span))
+            }
             TokenKind::LBrace => {
                 let (stmts, span) = self.parse_delimited(Compound, span, Self::parse_stmt)?;
                 let block = Block {
@@ -368,6 +391,28 @@ impl<'a> Parser<'a> {
                     span,
                 };
                 let kind = ExprKind::Block(block);
+                Ok(Expr::new(kind, span))
+            }
+            TokenKind::LBracket => {
+                let (items, span) = self.parse_delimited(Bracket, span, Self::parse_expr)?;
+                let kind = ExprKind::List {
+                    tuple: false,
+                    items: items.into_boxed_slice(),
+                };
+                Ok(Expr::new(kind, span))
+            }
+            TokenKind::LParen => {
+                let (mut items, span) = self.parse_delimited(Paren, span, Self::parse_expr)?;
+
+                let kind = match items.len() {
+                    0 => ExprKind::Unit,
+                    1 => items.pop().unwrap().kind,
+                    _ => ExprKind::List {
+                        tuple: true,
+                        items: items.into_boxed_slice(),
+                    },
+                };
+
                 Ok(Expr::new(kind, span))
             }
             TokenKind::String(s) => Self::parse_string(s, span),
@@ -382,11 +427,6 @@ impl<'a> Parser<'a> {
             TokenKind::Integer(lit) => {
                 let kind = ExprKind::Integer(lit.parse().unwrap());
                 Ok(Expr::new(kind, span))
-            }
-            TokenKind::LParen => {
-                let expr = self.parse_expr()?;
-                self.expect(TokenKind::RParen)?;
-                Ok(expr)
             }
 
             _ => Err(ParseError::new(ParseErrorKind::InvalidExpr, span)),

@@ -94,8 +94,7 @@ impl<'a> Lexer<'a> {
     fn skip_whitespace(&mut self) {
         while !self.is_eof() {
             match self.first() {
-                '/' if self.second() == '/' => {
-                    self.bump();
+                '#' => {
                     self.bump();
                     self.eat_while(|c| c != '\n');
                 }

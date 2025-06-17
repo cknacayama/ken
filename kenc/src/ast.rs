@@ -180,12 +180,23 @@ pub enum StmtKind<'a> {
 
 #[derive(Debug)]
 pub enum ExprKind<'a> {
+    Unit,
     Ident(&'a str),
     Float(f64),
     Integer(i64),
     String(Cow<'a, str>),
 
     Block(Block<'a>),
+
+    While {
+        cond: Box<Expr<'a>>,
+        body: Block<'a>,
+    },
+
+    List {
+        tuple: bool,
+        items: Box<[Expr<'a>]>,
+    },
 
     If {
         cond: Box<Expr<'a>>,
@@ -196,6 +207,11 @@ pub enum ExprKind<'a> {
     Call {
         callee: Box<Expr<'a>>,
         args:   Box<[Expr<'a>]>,
+    },
+
+    Idx {
+        expr: Box<Expr<'a>>,
+        idx:  Box<Expr<'a>>,
     },
 
     Prefix {

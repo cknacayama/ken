@@ -5,6 +5,7 @@
 
 use std::fmt::Display;
 
+use crate::obj::{MutObj, Obj};
 use crate::value::Value;
 use crate::{RuntimeError, RuntimeResult};
 
@@ -30,7 +31,7 @@ impl Builtin {
 
     #[must_use]
     pub fn core_builtins() -> impl ExactSizeIterator<Item = Self> {
-        core_bultins![print, println, pow].into_iter()
+        core_bultins![print, println, pow, push, len].into_iter()
     }
 
     pub const fn print() -> Self {
@@ -43,6 +44,14 @@ impl Builtin {
 
     pub const fn pow() -> Self {
         Self::new("pow", builtin_pow)
+    }
+
+    pub const fn push() -> Self {
+        Self::new("push", builtin_push)
+    }
+
+    pub const fn len() -> Self {
+        Self::new("len", builtin_len)
     }
 
     #[must_use]
@@ -99,4 +108,30 @@ fn builtin_pow(args: &[Value]) -> RuntimeResult<Value> {
         _ => return Err(RuntimeError::TypeError),
     };
     Ok(Value::Float(x))
+}
+
+fn builtin_push(args: &[Value]) -> RuntimeResult<Value> {
+    let mut list = get_arg(args, 0)?.as_mut_obj()?.as_list_mut()?;
+    let item = get_arg(args, 1)?;
+    list.push(item.clone());
+    Ok(Value::Unit)
+}
+
+fn builtin_len(args: &[Value]) -> RuntimeResult<Value> {
+    let value = get_arg(args, 0)?;
+    match value {
+        Value::MutObj(obj) => {
+            let obj = obj.borrow()?;
+            match &*obj {
+                MutObj::List(values) => Ok(Value::Int(values.len() as i64)),
+                MutObj::Tuple(values) => Ok(Value::Int(values.len() as i64)),
+                _ => Err(RuntimeError::TypeError),
+            }
+        }
+        Value::Obj(obj) => match obj.as_ref() {
+            Obj::String(string) => Ok(Value::Int(string.len() as i64)),
+            _ => Err(RuntimeError::TypeError),
+        },
+        _ => Err(RuntimeError::TypeError),
+    }
 }

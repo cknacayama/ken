@@ -1,0 +1,22 @@
+fn main() {
+    let i = 0;
+    let list = [];
+
+    while i < 10 {
+        push(list, i);
+        i = i + 1;
+    };
+
+    println(list);
+
+    i = 0;
+
+    while i < len(list) {
+        list[i] = list[i] * 2;
+        i = i + 1;
+    }
+
+    println(list);
+}
+
+main();
