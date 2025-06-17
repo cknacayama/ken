@@ -9,10 +9,12 @@ use crate::obj::{MutObj, Obj};
 use crate::value::Value;
 use crate::{RuntimeError, RuntimeResult};
 
+pub type BuiltinFn = fn(args: &[Value]) -> RuntimeResult<Value>;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Builtin {
     name: &'static str,
-    ptr:  fn(&[Value]) -> RuntimeResult<Value>,
+    ptr:  BuiltinFn,
 }
 
 macro_rules! core_bultins {
@@ -24,34 +26,33 @@ macro_rules! core_bultins {
     };
 }
 
+macro_rules! impl_core {
+    [$($name:ident),* $(,)?] => {
+        impl Builtin {
+            const CORE_LEN: usize = core_bultins![$($name),*].len();
+            const CORE: [Builtin; Self::CORE_LEN] = core_bultins![$($name),*];
+
+            #[inline]
+            #[must_use]
+            pub const fn core_builtins() -> &'static [Builtin] {
+                &Self::CORE
+            }
+
+            $(
+                #[must_use]
+                pub const fn $name() -> Builtin {
+                    Self::new(stringify!($name), $name)
+                }
+            )*
+        }
+    };
+}
+
+impl_core![print, println, pow, push, len];
+
 impl Builtin {
     pub const fn new(name: &'static str, ptr: fn(&[Value]) -> RuntimeResult<Value>) -> Self {
         Self { name, ptr }
-    }
-
-    #[must_use]
-    pub fn core_builtins() -> impl ExactSizeIterator<Item = Self> {
-        core_bultins![print, println, pow, push, len].into_iter()
-    }
-
-    pub const fn print() -> Self {
-        Self::new("print", builtin_print)
-    }
-
-    pub const fn println() -> Self {
-        Self::new("println", builtin_println)
-    }
-
-    pub const fn pow() -> Self {
-        Self::new("pow", builtin_pow)
-    }
-
-    pub const fn push() -> Self {
-        Self::new("push", builtin_push)
-    }
-
-    pub const fn len() -> Self {
-        Self::new("len", builtin_len)
     }
 
     #[must_use]
@@ -82,14 +83,14 @@ impl Display for Builtin {
     }
 }
 
-fn builtin_print(args: &[Value]) -> RuntimeResult<Value> {
+fn print(args: &[Value]) -> RuntimeResult<Value> {
     for arg in args {
         print!("{arg}");
     }
     Ok(Value::Unit)
 }
 
-fn builtin_println(args: &[Value]) -> RuntimeResult<Value> {
+fn println(args: &[Value]) -> RuntimeResult<Value> {
     for arg in args {
         println!("{arg}");
     }
@@ -100,7 +101,7 @@ fn get_arg(args: &[Value], pos: usize) -> RuntimeResult<&Value> {
     args.get(pos).ok_or(RuntimeError::NotEnoughArgs)
 }
 
-fn builtin_pow(args: &[Value]) -> RuntimeResult<Value> {
+fn pow(args: &[Value]) -> RuntimeResult<Value> {
     let lhs = get_arg(args, 0)?;
     let rhs = get_arg(args, 1)?;
     let x = match (lhs, rhs) {
@@ -110,14 +111,14 @@ fn builtin_pow(args: &[Value]) -> RuntimeResult<Value> {
     Ok(Value::Float(x))
 }
 
-fn builtin_push(args: &[Value]) -> RuntimeResult<Value> {
+fn push(args: &[Value]) -> RuntimeResult<Value> {
     let mut list = get_arg(args, 0)?.as_mut_obj()?.as_list_mut()?;
     let item = get_arg(args, 1)?;
     list.push(item.clone());
     Ok(Value::Unit)
 }
 
-fn builtin_len(args: &[Value]) -> RuntimeResult<Value> {
+fn len(args: &[Value]) -> RuntimeResult<Value> {
     let value = get_arg(args, 0)?;
     match value {
         Value::MutObj(obj) => {

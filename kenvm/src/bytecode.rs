@@ -6,7 +6,7 @@ use crate::value::Value;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
-pub(crate) enum OpCode {
+enum OpCode {
     Nop,
 
     Pop,
@@ -92,14 +92,6 @@ impl OpCode {
 /// Representation of bytecode instructions.
 ///
 /// `Op` can be used for building a [Chunk].
-/// `Op` is not the internal representation of
-/// the bytecode.
-///
-/// # Errors
-///
-/// The evaluation of an instruction
-/// will return `Err` if there are any type
-/// mismatches.
 #[derive(Debug, Clone, Copy)]
 pub enum Op {
     Nop,
@@ -281,8 +273,9 @@ impl ChunkBuilder {
     #[must_use]
     pub fn update_jmp(&mut self, at: usize, new: usize) -> Option<usize> {
         let code = self.ops.get(at).copied().and_then(OpCode::decode)?;
+        let at = at + 1;
         if matches!(code, OpCode::Jmp | OpCode::JmpIfNot) {
-            let slice = self.ops.get_mut(at + 1..at + 9)?;
+            let slice = self.ops.get_mut(at..at + size_of::<usize>())?;
             let old = usize::from_ne_bytes(slice.try_into().unwrap());
             for (new, old) in new.to_ne_bytes().into_iter().zip(slice) {
                 *old = new;
@@ -406,6 +399,7 @@ impl Fetch<Span> for OpStream<'_> {
 }
 
 impl Fetch<Op> for OpStream<'_> {
+    #[inline]
     fn fetch(&mut self) -> Option<Op> {
         let op = self.fetch()?;
         match op {

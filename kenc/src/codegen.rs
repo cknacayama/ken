@@ -24,6 +24,8 @@ impl Default for GlobalMap {
         let builtins = Builtin::core_builtins();
         let current = builtins.len();
         let globals = builtins
+            .into_iter()
+            .copied()
             .enumerate()
             .map(|(at, b)| (Rc::from(b.name()), at))
             .collect::<HashMap<_, _>>();

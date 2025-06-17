@@ -8,7 +8,7 @@ use std::rc::Rc;
 use kenspan::Span;
 
 use crate::builtin::Builtin;
-use crate::bytecode::{Chunk, Fetch, OpCode, OpStream};
+use crate::bytecode::{Chunk, Fetch, Op, OpStream};
 use crate::obj::{Function, Obj};
 use crate::value::{Value, try_le, try_lt};
 
@@ -65,6 +65,8 @@ pub struct Vm {
 impl Default for Vm {
     fn default() -> Self {
         let global = Builtin::core_builtins()
+            .into_iter()
+            .copied()
             .map(|b| Value::Obj(Rc::new(Obj::Builtin(b))))
             .collect();
         Self {
@@ -219,52 +221,48 @@ impl Vm {
         let op = frame.fetch()?;
 
         match op {
-            OpCode::Nop => Ok(Status::Running),
-            OpCode::Pop => {
+            Op::Nop => Ok(Status::Running),
+            Op::Pop => {
                 self.pop_stack()?;
                 Ok(Status::Running)
             }
 
-            OpCode::Push => {
-                let at = frame.fetch()?;
+            Op::Push(at) => {
                 let value = frame.fetch_value(at).ok_or(RuntimeError::NoValue)?;
                 self.push_stack(value);
                 Ok(Status::Running)
             }
 
-            OpCode::PushInt => {
-                let int = frame.fetch::<u32>()?;
+            Op::PushInt(int) => {
                 let value = Value::Int(i64::from(int));
                 self.push_stack(value);
                 Ok(Status::Running)
             }
 
-            OpCode::MakeList => {
-                let len = frame.fetch()?;
+            Op::MakeList(len) => {
                 let values = self.drain(len)?;
                 let list = Value::from(values);
                 self.push_stack(list);
                 Ok(Status::Running)
             }
 
-            OpCode::MakeTuple => {
-                let len = frame.fetch()?;
+            Op::MakeTuple(len) => {
                 let values = self.drain(len)?;
                 let list = Value::from(values.into_boxed_slice());
                 self.push_stack(list);
                 Ok(Status::Running)
             }
 
-            OpCode::Add => self.infix_op(|a, b| a + b).map_err(FrameError::from),
-            OpCode::Sub => self.infix_op(|a, b| a - b).map_err(FrameError::from),
-            OpCode::Mul => self.infix_op(|a, b| a * b).map_err(FrameError::from),
-            OpCode::Div => self.infix_op(|a, b| a / b).map_err(FrameError::from),
-            OpCode::Rem => self.infix_op(|a, b| a % b).map_err(FrameError::from),
+            Op::Add => self.infix_op(|a, b| a + b).map_err(FrameError::from),
+            Op::Sub => self.infix_op(|a, b| a - b).map_err(FrameError::from),
+            Op::Mul => self.infix_op(|a, b| a * b).map_err(FrameError::from),
+            Op::Div => self.infix_op(|a, b| a / b).map_err(FrameError::from),
+            Op::Rem => self.infix_op(|a, b| a % b).map_err(FrameError::from),
 
-            OpCode::Neg => self.prefix_op(|x| -x).map_err(FrameError::from),
-            OpCode::Not => self.prefix_op(|x| !x).map_err(FrameError::from),
+            Op::Neg => self.prefix_op(|x| -x).map_err(FrameError::from),
+            Op::Not => self.prefix_op(|x| !x).map_err(FrameError::from),
 
-            OpCode::Eq => {
+            Op::Eq => {
                 let rhs = self.pop_stack()?;
                 let lhs = self.pop_stack()?;
                 let value = Value::Bool(lhs == rhs);
@@ -272,11 +270,10 @@ impl Vm {
                 Ok(Status::Running)
             }
 
-            OpCode::Lt => self.infix_op(try_lt).map_err(FrameError::from),
-            OpCode::Le => self.infix_op(try_le).map_err(FrameError::from),
+            Op::Lt => self.infix_op(try_lt).map_err(FrameError::from),
+            Op::Le => self.infix_op(try_le).map_err(FrameError::from),
 
-            OpCode::Call => {
-                let count = frame.fetch::<u8>()?;
+            Op::Call(count) => {
                 let args = self.drain(count as usize)?;
                 let value = self.pop_stack()?;
 
@@ -299,20 +296,19 @@ impl Vm {
                     _ => Err(FrameError::from(RuntimeError::TypeError)),
                 }
             }
-            OpCode::AddLocal => {
+            Op::AddLocal => {
                 let value = self.pop_stack()?;
                 self.local.push(value);
                 Ok(Status::Running)
             }
-            OpCode::AddGlobal => {
+            Op::AddGlobal => {
                 let value = self.pop_stack()?;
                 self.global.push(value);
                 Ok(Status::Running)
             }
-            OpCode::LoadIdx => self.load_idx().map_err(FrameError::from),
-            OpCode::StoreIdx => self.store_idx().map_err(FrameError::from),
-            OpCode::Load => {
-                let at = frame.fetch::<usize>()?;
+            Op::LoadIdx => self.load_idx().map_err(FrameError::from),
+            Op::StoreIdx => self.store_idx().map_err(FrameError::from),
+            Op::Load(at) => {
                 let value = self
                     .local
                     .get(frame.bp() + at)
@@ -320,8 +316,7 @@ impl Vm {
                 self.push_stack(value.clone());
                 Ok(Status::Running)
             }
-            OpCode::Store => {
-                let at = frame.fetch::<usize>()?;
+            Op::Store(at) => {
                 let value = self.pop_stack()?;
                 let local = self
                     .local
@@ -330,20 +325,17 @@ impl Vm {
                 *local = value;
                 Ok(Status::Running)
             }
-            OpCode::Restore => {
-                let count = frame.fetch::<usize>()?;
+            Op::Restore(count) => {
                 let lp = self.lp() - count;
                 self.restore_local(lp)?;
                 Ok(Status::Running)
             }
-            OpCode::LoadGlobal => {
-                let at = frame.fetch::<usize>()?;
+            Op::LoadGlobal(at) => {
                 let value = self.global.get(at).ok_or(RuntimeError::GlobalNotFound)?;
                 self.push_stack(value.clone());
                 Ok(Status::Running)
             }
-            OpCode::StoreGlobal => {
-                let at = frame.fetch::<usize>()?;
+            Op::StoreGlobal(at) => {
                 let value = self.pop_stack()?;
                 let global = self
                     .global
@@ -352,20 +344,18 @@ impl Vm {
                 *global = value;
                 Ok(Status::Running)
             }
-            OpCode::Jmp => {
-                let ip = frame.fetch::<usize>()?;
+            Op::Jmp(ip) => {
                 frame.jump(ip);
                 Ok(Status::Running)
             }
-            OpCode::JmpIfNot => {
-                let ip = frame.fetch::<usize>()?;
+            Op::JmpIfNot(ip) => {
                 let cond: bool = self.pop_stack()?.try_into()?;
                 if !cond {
                     frame.jump(ip);
                 }
                 Ok(Status::Running)
             }
-            OpCode::Ret => {
+            Op::Ret => {
                 let ret = self.pop_stack()?;
                 Ok(Status::Finished(ret))
             }
