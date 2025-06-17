@@ -320,10 +320,12 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    #[must_use]
     pub const fn len(&self) -> usize {
         self.ops.len()
     }
 
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -462,7 +464,7 @@ impl Display for OpStream<'_> {
         let mut stream = *self;
         let mut ip = stream.ip;
         while let Some(op) = <Self as Fetch<Op>>::fetch(&mut stream) {
-            writeln!(f, "    {:<max$}    {op:?}", ip)?;
+            writeln!(f, "    {ip:<max$}    {op:?}")?;
             ip = stream.ip;
         }
         Ok(())

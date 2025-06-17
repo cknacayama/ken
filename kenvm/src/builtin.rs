@@ -11,78 +11,6 @@ use crate::{RuntimeError, RuntimeResult};
 
 pub type BuiltinFn = fn(args: &[Value]) -> RuntimeResult<Value>;
 
-#[derive(Debug, Clone, Copy)]
-pub struct Builtin {
-    name: &'static str,
-    ptr:  BuiltinFn,
-}
-
-macro_rules! core_bultins {
-    [] => {
-        []
-    };
-    [$($name:ident),+ $(,)?] => {
-        [$(Builtin::$name()),+]
-    };
-}
-
-macro_rules! impl_core {
-    [$($name:ident),* $(,)?] => {
-        impl Builtin {
-            const CORE_LEN: usize = core_bultins![$($name),*].len();
-            const CORE: [Builtin; Self::CORE_LEN] = core_bultins![$($name),*];
-
-            #[inline]
-            #[must_use]
-            pub const fn core_builtins() -> &'static [Builtin] {
-                &Self::CORE
-            }
-
-            $(
-                #[must_use]
-                pub const fn $name() -> Builtin {
-                    Self::new(stringify!($name), $name)
-                }
-            )*
-        }
-    };
-}
-
-impl_core![print, println, pow, push, len];
-
-impl Builtin {
-    pub const fn new(name: &'static str, ptr: fn(&[Value]) -> RuntimeResult<Value>) -> Self {
-        Self { name, ptr }
-    }
-
-    #[must_use]
-    pub const fn name(&self) -> &'static str {
-        self.name
-    }
-}
-
-impl PartialEq for Builtin {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for Builtin {}
-
-impl std::ops::Deref for Builtin {
-    type Target = fn(&[Value]) -> RuntimeResult<Value>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ptr
-    }
-}
-
-impl Display for Builtin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<builtin '{}' at {:?}>", self.name, self.ptr)
-    }
-}
-
 fn print(args: &[Value]) -> RuntimeResult<Value> {
     for arg in args {
         print!("{arg}");
@@ -118,21 +46,102 @@ fn push(args: &[Value]) -> RuntimeResult<Value> {
     Ok(Value::Unit)
 }
 
+fn try_cast_int<T>(from: T) -> RuntimeResult<Value>
+where
+    i64: TryFrom<T>,
+{
+    from.try_into()
+        .map_err(|_| RuntimeError::OutOfBoundsInteger)
+        .map(Value::Int)
+}
+
 fn len(args: &[Value]) -> RuntimeResult<Value> {
     let value = get_arg(args, 0)?;
     match value {
         Value::MutObj(obj) => {
             let obj = obj.borrow()?;
             match &*obj {
-                MutObj::List(values) => Ok(Value::Int(values.len() as i64)),
-                MutObj::Tuple(values) => Ok(Value::Int(values.len() as i64)),
+                MutObj::List(values) => try_cast_int(values.len()),
+                MutObj::Tuple(values) => try_cast_int(values.len()),
                 _ => Err(RuntimeError::TypeError),
             }
         }
         Value::Obj(obj) => match obj.as_ref() {
-            Obj::String(string) => Ok(Value::Int(string.len() as i64)),
+            Obj::String(string) => try_cast_int(string.len()),
             _ => Err(RuntimeError::TypeError),
         },
         _ => Err(RuntimeError::TypeError),
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct Builtin {
+    name: &'static str,
+    ptr:  BuiltinFn,
+}
+
+impl Builtin {
+    pub const fn new(name: &'static str, ptr: fn(&[Value]) -> RuntimeResult<Value>) -> Self {
+        Self { name, ptr }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl PartialEq for Builtin {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Builtin {}
+
+impl std::ops::Deref for Builtin {
+    type Target = fn(&[Value]) -> RuntimeResult<Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
+
+impl Display for Builtin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<builtin '{}' at {:?}>", self.name, self.ptr)
+    }
+}
+
+macro_rules! core_bultins {
+    [] => {
+        []
+    };
+    [$($name:ident),+ $(,)?] => {
+        [$(Builtin::$name()),+]
+    };
+}
+
+macro_rules! impl_core {
+    [$($name:ident),* $(,)?] => {
+        impl Builtin {
+            const CORE_LEN: usize = core_bultins![$($name),*].len();
+            const CORE: [Builtin; Self::CORE_LEN] = core_bultins![$($name),*];
+
+            #[inline]
+            #[must_use]
+            pub const fn core_builtins() -> &'static [Builtin] {
+                &Self::CORE
+            }
+
+            $(
+                #[must_use]
+                pub const fn $name() -> Builtin {
+                    Self::new(stringify!($name), $name)
+                }
+            )*
+        }
+    };
+}
+
+impl_core![print, println, pow, push, len];

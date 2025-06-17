@@ -65,7 +65,7 @@ pub struct Vm {
 impl Default for Vm {
     fn default() -> Self {
         let global = Builtin::core_builtins()
-            .into_iter()
+            .iter()
             .copied()
             .map(|b| Value::Obj(Rc::new(Obj::Builtin(b))))
             .collect();
@@ -365,6 +365,8 @@ impl Vm {
 
 #[derive(thiserror::Error, Debug, Clone, Copy)]
 pub enum RuntimeError {
+    #[error("out of bounds integer value")]
+    OutOfBoundsInteger,
     #[error("out of bounds access")]
     OutOfBounds,
     #[error("division by zero")]
