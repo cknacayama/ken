@@ -4,7 +4,8 @@ use kenspan::{Span, Spand};
 use thiserror::Error;
 
 use crate::ast::{
-    self, Block, Expr, ExprKind, InfixOp, Item, ItemKind, Local, Operator, PrefixOp, Stmt, StmtKind,
+    self, Block, Expr, ExprKind, InfixOp, Item, ItemKind, Local, Operator, PrefixOp, Stmt,
+    StmtKind, TableEntry,
 };
 use crate::token::{Token, TokenKind};
 
@@ -353,6 +354,19 @@ impl<'a> Parser<'a> {
                     };
                     expr = Expr::new(kind, span);
                 }
+                Some(Token {
+                    kind: TokenKind::Dot,
+                    ..
+                }) => {
+                    self.eat();
+                    let Spand { kind, span } = self.expect_ident()?;
+                    let span = expr.span.join(span);
+                    let kind = ExprKind::Field {
+                        expr:  Box::new(expr),
+                        field: kind,
+                    };
+                    expr = Expr::new(kind, span);
+                }
                 _ => break,
             }
         }
@@ -422,6 +436,14 @@ impl<'a> Parser<'a> {
                 let kind = ExprKind::Ident(id);
                 Ok(Expr::new(kind, span))
             }
+            TokenKind::KwTrue => {
+                let kind = ExprKind::Bool(true);
+                Ok(Expr::new(kind, span))
+            }
+            TokenKind::KwFalse => {
+                let kind = ExprKind::Bool(false);
+                Ok(Expr::new(kind, span))
+            }
             TokenKind::Float(lit) => {
                 let x = Self::parse_number(lit).unwrap();
                 let kind = ExprKind::Float(x);
@@ -433,9 +455,34 @@ impl<'a> Parser<'a> {
                 let kind = ExprKind::Integer(x);
                 Ok(Expr::new(kind, span))
             }
+            TokenKind::KwTable => {
+                let (entries, entries_span) = self.expect_delimited(Brace, Self::parse_entry)?;
+                let span = span.join(entries_span);
+                let kind = ExprKind::Table(entries.into_boxed_slice());
+                Ok(Expr::new(kind, span))
+            }
 
             _ => Err(ParseError::new(ParseErrorKind::InvalidExpr, span)),
         }
+    }
+
+    fn parse_entry(&mut self) -> ParseResult<TableEntry<'a>> {
+        let Spand { kind, span } = self.next()?;
+        let key = match kind {
+            TokenKind::LBracket => {
+                let expr = self.parse_expr()?;
+                self.expect(TokenKind::RBracket)?;
+                expr
+            }
+            TokenKind::Ident(key) => {
+                let kind = ExprKind::String(Cow::Borrowed(key));
+                Expr::new(kind, span)
+            }
+            _ => return Err(ParseError::new(ParseErrorKind::InvalidExpr, span)),
+        };
+        self.expect(TokenKind::Colon)?;
+        let value = self.parse_expr()?;
+        Ok(TableEntry { key, value })
     }
 
     fn parse_number<N>(s: &str) -> Result<N, N::Err>
@@ -490,6 +537,7 @@ trait Delim {
 struct Paren;
 struct Bracket;
 struct Compound;
+struct Brace;
 
 impl Delim for Paren {
     fn opening() -> TokenKind<'static> {
@@ -503,6 +551,17 @@ impl Delim for Paren {
     }
 }
 
+impl Delim for Brace {
+    fn opening() -> TokenKind<'static> {
+        TokenKind::LBrace
+    }
+    fn closing() -> TokenKind<'static> {
+        TokenKind::RBrace
+    }
+    fn separator() -> Option<TokenKind<'static>> {
+        Some(TokenKind::Comma)
+    }
+}
 impl Delim for Bracket {
     fn opening() -> TokenKind<'static> {
         TokenKind::LBracket

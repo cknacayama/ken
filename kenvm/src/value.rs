@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::ops::{Add, Div, Mul, Neg, Not, Rem, Sub};
 use std::rc::Rc;
 
+use crate::hash::HashValue;
 use crate::obj::{Function, MutObj, MutObjRef, Obj, ObjRef};
 use crate::{RuntimeError, RuntimeResult};
 
@@ -30,6 +31,20 @@ impl Value {
             Ok(v)
         } else {
             Err(RuntimeError::TypeError)
+        }
+    }
+
+    #[must_use]
+    pub fn as_hash(&self) -> Option<HashValue> {
+        match self {
+            Self::Unit => Some(HashValue::Unit),
+            Self::Bool(b) => Some(HashValue::Bool(*b)),
+            Self::Int(x) => Some(HashValue::Int(*x)),
+            Self::Obj(obj) => match obj.as_ref() {
+                Obj::String(s) => Some(HashValue::String(s.clone())),
+                _ => None,
+            },
+            _ => None,
         }
     }
 }
@@ -130,6 +145,7 @@ value_impl!(i64, Int);
 value_impl!(bool, Bool);
 value_impl!(MutObjRef, MutObj);
 value_impl!(Function, obj Function);
+value_impl!(Rc<str>, obj String);
 value_impl!(Vec<Value>, mut obj List);
 value_impl!(Box<[Value]>, mut obj Tuple);
 

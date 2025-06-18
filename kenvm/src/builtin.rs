@@ -4,21 +4,22 @@
 )]
 
 use std::fmt::Display;
+use std::rc::Rc;
 
 use crate::obj::{MutObj, Obj};
 use crate::value::Value;
-use crate::{RuntimeError, RuntimeResult};
+use crate::{RuntimeError, RuntimeResult, Vm};
 
-pub type BuiltinFn = fn(args: &[Value]) -> RuntimeResult<Value>;
+pub type BuiltinFn = fn(vm: &Vm, args: &[Value]) -> RuntimeResult<Value>;
 
-fn print(args: &[Value]) -> RuntimeResult<Value> {
+fn print(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
     for arg in args {
         print!("{arg}");
     }
     Ok(Value::Unit)
 }
 
-fn println(args: &[Value]) -> RuntimeResult<Value> {
+fn println(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
     for arg in args {
         println!("{arg}");
     }
@@ -29,14 +30,23 @@ fn get_arg(args: &[Value], pos: usize) -> RuntimeResult<&Value> {
     args.get(pos).ok_or(RuntimeError::NotEnoughArgs)
 }
 
-fn push(args: &[Value]) -> RuntimeResult<Value> {
+fn assert(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
+    let cond = get_arg(args, 0)?.clone().try_into()?;
+    if cond {
+        Ok(Value::Unit)
+    } else {
+        Err(RuntimeError::AssertFailed)
+    }
+}
+
+fn push(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
     let mut list = get_arg(args, 0)?.as_mut_obj()?.as_list_mut()?;
     let item = get_arg(args, 1)?;
     list.push(item.clone());
     Ok(Value::Unit)
 }
 
-fn len(args: &[Value]) -> RuntimeResult<Value> {
+fn len(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
     let value = get_arg(args, 0)?;
     match value {
         Value::MutObj(obj) => {
@@ -44,6 +54,7 @@ fn len(args: &[Value]) -> RuntimeResult<Value> {
             match &*obj {
                 MutObj::List(values) => try_cast_int(values.len()),
                 MutObj::Tuple(values) => try_cast_int(values.len()),
+                MutObj::Table(values) => try_cast_int(values.len()),
                 _ => Err(RuntimeError::TypeError),
             }
         }
@@ -55,6 +66,22 @@ fn len(args: &[Value]) -> RuntimeResult<Value> {
     }
 }
 
+fn disassemble(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
+    let obj = get_arg(args, 0)?.as_obj()?;
+    let ptr = Rc::as_ptr(obj);
+    let f = get_arg(args, 0)?
+        .as_obj()?
+        .as_function()
+        .ok_or(RuntimeError::TypeError)?;
+    println!("<fn at {ptr:?}>:");
+    if let Some(name) = f.name() {
+        println!("  name: {name}");
+    }
+    println!("  arity: {}", f.arity());
+    print!("{}", f.chunk());
+    Ok(Value::Unit)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Builtin {
     name: &'static str,
@@ -62,7 +89,7 @@ pub struct Builtin {
 }
 
 impl Builtin {
-    pub const fn new(name: &'static str, ptr: fn(&[Value]) -> RuntimeResult<Value>) -> Self {
+    pub const fn new(name: &'static str, ptr: fn(&Vm, &[Value]) -> RuntimeResult<Value>) -> Self {
         Self { name, ptr }
     }
 
@@ -90,7 +117,7 @@ impl PartialEq for Builtin {
 impl Eq for Builtin {}
 
 impl std::ops::Deref for Builtin {
-    type Target = fn(&[Value]) -> RuntimeResult<Value>;
+    type Target = BuiltinFn;
 
     fn deref(&self) -> &Self::Target {
         &self.ptr
@@ -130,4 +157,4 @@ macro_rules! impl_core {
     };
 }
 
-impl_core![print, println, push, len];
+impl_core![print, println, push, len, disassemble, assert];

@@ -5,11 +5,11 @@ use std::rc::Rc;
 use kenspan::{Span, Spand};
 use kenvm::builtin::Builtin;
 use kenvm::bytecode::{ChunkBuilder, Op};
-use kenvm::obj::{Function, Obj};
+use kenvm::obj::Function;
 use kenvm::value::Value;
 
 use crate::ast::{
-    Block, Expr, ExprKind, Fn, InfixOp, Item, ItemKind, Local, PrefixOp, Stmt, StmtKind,
+    Block, Expr, ExprKind, Fn, InfixOp, Item, ItemKind, Local, PrefixOp, Stmt, StmtKind, TableEntry,
 };
 
 #[derive(Debug)]
@@ -154,19 +154,30 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         self.chunk.push_push(value, span).into()
     }
 
+    const fn inc_stack(&mut self, count: usize) {
+        self.stack += count;
+    }
+
+    const fn dec_stack(&mut self, count: usize) {
+        self.stack = self.stack.checked_sub(count).unwrap();
+    }
+
     fn push_unit(&mut self, span: Span) -> GenSpan {
         let op = self.push_push(Value::Unit, span);
-        self.stack += 1;
+        self.inc_stack(1);
         op
     }
 
     #[must_use]
     pub fn finish(mut self) -> Function {
+        let name = if self.name.is_empty() {
+            None
+        } else {
+            Some(self.global.intern(Cow::Borrowed(self.name)))
+        };
         self.push_ret();
         let chunk = self.chunk.finish();
-        // println!("<fn {}>:", self.name);
-        // print!("{chunk}");
-        Function::new(self.arity as usize, chunk)
+        Function::new(name, self.arity as usize, chunk)
     }
 
     fn compile_many<T>(
@@ -193,7 +204,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             StmtKind::Semi(expr) => {
                 let expr = self.compile_expr(expr)?;
                 let end = self.push_op(Op::Pop, span);
-                self.stack -= 1;
+                self.dec_stack(1);
                 Ok(expr.join(end))
             }
             StmtKind::Empty => {
@@ -213,6 +224,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     pub fn compile_expr(&mut self, Expr { kind, span }: Expr<'a>) -> CodegenResult<GenSpan> {
         match kind {
             ExprKind::Unit => Ok(self.push_unit(span)),
+            ExprKind::Bool(b) => Ok(self.compile_bool_expr(b, span)),
             ExprKind::Ident(id) => self.compile_ident_expr(id, span),
             ExprKind::Float(n) => Ok(self.compile_float_expr(n, span)),
             ExprKind::Integer(n) => Ok(self.compile_int_expr(n, span)),
@@ -230,6 +242,8 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             ExprKind::While { cond, body } => self.compile_while(*cond, body, span),
             ExprKind::List { tuple, items } => self.compile_list(tuple, items, span),
             ExprKind::Idx { expr, idx } => self.compile_idx(*expr, *idx, span),
+            ExprKind::Table(items) => self.compile_table(items, span),
+            ExprKind::Field { expr, field } => self.compile_field(*expr, field, span),
         }
     }
 
@@ -268,16 +282,48 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         };
 
         let end = self.bind_variable(local.name, span);
-        self.stack -= 1;
+        self.dec_stack(1);
 
         Ok(bind.join(end))
+    }
+
+    fn compile_table(
+        &mut self,
+        entries: Box<[TableEntry<'a>]>,
+        span: Span,
+    ) -> CodegenResult<GenSpan> {
+        let count = entries.len();
+        let entries = self.compile_many(entries, Self::compile_entry)?;
+        let end = self.push_op(Op::MakeTable(count), span);
+        self.dec_stack(count * 2);
+        self.inc_stack(1);
+        Ok(entries.map_or(end, |span| span.join(end)))
+    }
+
+    fn compile_entry(&mut self, entry: TableEntry<'a>) -> CodegenResult<GenSpan> {
+        let key = self.compile_expr(entry.key)?;
+        let value = self.compile_expr(entry.value)?;
+        Ok(key.join(value))
+    }
+
+    fn compile_field(
+        &mut self,
+        expr: Expr<'a>,
+        field: &'a str,
+        span: Span,
+    ) -> CodegenResult<GenSpan> {
+        let expr = self.compile_expr(expr)?;
+        let field = self.global.intern(Cow::Borrowed(field));
+        self.push_push(Value::from(field), span);
+        let end = self.push_op(Op::LoadIdx, span);
+        Ok(expr.join(end))
     }
 
     fn compile_idx(&mut self, expr: Expr<'a>, idx: Expr<'a>, span: Span) -> CodegenResult<GenSpan> {
         let expr = self.compile_expr(expr)?;
         self.compile_expr(idx)?;
         let end = self.push_op(Op::LoadIdx, span);
-        self.stack -= 1;
+        self.dec_stack(1);
         Ok(expr.join(end))
     }
 
@@ -289,13 +335,13 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     ) -> CodegenResult<GenSpan> {
         let len = items.len();
         let items = self.compile_many(items, Self::compile_expr)?;
-        self.stack -= len;
+        self.dec_stack(len);
         let end = if tuple {
             self.push_op(Op::MakeTuple(len), span)
         } else {
             self.push_op(Op::MakeList(len), span)
         };
-        self.stack += 1;
+        self.inc_stack(1);
         Ok(items.map_or(end, |items| items.join(end)))
     }
 
@@ -307,10 +353,10 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     ) -> CodegenResult<GenSpan> {
         let cond = self.compile_expr(cond)?;
         let jmp = self.push_op(Op::JmpIfNot(0), span);
-        self.stack -= 1;
+        self.dec_stack(1);
         self.compile_block(body)?;
         self.push_op(Op::Pop, span);
-        self.stack -= 1;
+        self.dec_stack(1);
         self.push_op(Op::Jmp(cond.start), span);
         let end = self.push_unit(span);
         self.update_jmp(jmp.start, end.start);
@@ -326,11 +372,11 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     ) -> CodegenResult<GenSpan> {
         let cond = self.compile_expr(cond)?;
         let jmp = self.push_op(Op::JmpIfNot(0), span);
-        self.stack -= 1;
+        self.dec_stack(1);
 
         self.compile_block(then)?;
         let jmp_end = self.push_op(Op::Jmp(0), span);
-        self.stack -= 1;
+        self.dec_stack(1);
 
         let els = self.compile_block(els)?;
         let end = els.end + 1;
@@ -347,14 +393,25 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         args: Box<[Expr<'a>]>,
         span: Span,
     ) -> CodegenResult<GenSpan> {
-        let callee = self.compile_expr(callee)?;
+        let (callee, method) = match callee.kind {
+            ExprKind::Field { expr, field } => {
+                let field = self.global.intern(Cow::Borrowed(field));
+                let at = self.chunk.push_value(Value::from(field));
+                (self.compile_expr(*expr)?, Some(at))
+            }
+            _ => (self.compile_expr(callee)?, None),
+        };
 
         let count = u8::try_from(args.len())
             .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
         self.compile_many(args, Self::compile_expr)?;
 
-        let end = self.push_op(Op::Call(count), span);
-        self.stack -= count as usize;
+        let end = if let Some(at) = method {
+            self.push_op(Op::CallMethod(count, at), span)
+        } else {
+            self.push_op(Op::Call(count), span)
+        };
+        self.dec_stack(count as usize);
 
         let span = callee.join(end);
         Ok(span)
@@ -374,19 +431,24 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
 
     fn compile_float_expr(&mut self, x: f64, span: Span) -> GenSpan {
         let op = self.push_push(Value::Float(x), span);
-        self.stack += 1;
+        self.inc_stack(1);
         op
     }
 
     fn compile_int_expr(&mut self, x: u32, span: Span) -> GenSpan {
-        self.stack += 1;
+        self.inc_stack(1);
         self.push_op(Op::PushU32(x), span)
+    }
+
+    fn compile_bool_expr(&mut self, b: bool, span: Span) -> GenSpan {
+        self.inc_stack(1);
+        self.push_op(Op::PushBool(b), span)
     }
 
     fn compile_str_expr(&mut self, s: Cow<'a, str>, span: Span) -> GenSpan {
         let s = self.global.intern(s);
-        let op = self.push_push(Value::Obj(Rc::new(Obj::String(s))), span);
-        self.stack += 1;
+        let op = self.push_push(Value::from(s), span);
+        self.inc_stack(1);
         op
     }
 
@@ -400,7 +462,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             Op::LoadGlobal(global)
         };
         let op = self.push_op(op, span);
-        self.stack += 1;
+        self.inc_stack(1);
         Ok(op)
     }
 
@@ -422,11 +484,19 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
                     ))
                 }
             }
+            ExprKind::Field { expr, field } => {
+                let expr = self.compile_expr(*expr)?;
+                let field = self.global.intern(Cow::Borrowed(field));
+                self.push_push(Value::from(field), span);
+                let end = self.push_op(Op::StoreIdx, span);
+                self.dec_stack(1);
+                Ok(expr.join(end))
+            }
             ExprKind::Idx { expr, idx } => {
                 let expr = self.compile_expr(*expr)?;
                 self.compile_expr(*idx)?;
                 let end = self.push_op(Op::StoreIdx, span);
-                self.stack -= 2;
+                self.dec_stack(2);
                 Ok(expr.join(end))
             }
             _ => Err(CodegenError::new(CodegenErrorKind::NotAssignable, span)),
@@ -441,7 +511,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     ) -> CodegenResult<GenSpan> {
         let value = self.compile_expr(rhs)?;
         let place = self.compile_place(lhs, span)?;
-        self.stack -= 1;
+        self.dec_stack(1);
         self.push_unit(span);
         Ok(value.join(place))
     }
@@ -493,7 +563,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
 
             InfixOp::Assign => unreachable!(),
         };
-        self.stack -= 1;
+        self.dec_stack(1);
         Ok(start.join(end))
     }
 

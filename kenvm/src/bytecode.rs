@@ -12,10 +12,12 @@ enum OpCode {
     Pop,
     Push,
 
+    PushBool,
     PushU32,
 
     MakeList,
     MakeTuple,
+    MakeTable,
 
     Neg,
     Not,
@@ -32,6 +34,7 @@ enum OpCode {
     Le,
 
     Call,
+    CallMethod,
 
     AddLocal,
     AddGlobal,
@@ -60,33 +63,36 @@ impl OpCode {
             0 => Some(Self::Nop),
             1 => Some(Self::Pop),
             2 => Some(Self::Push),
-            3 => Some(Self::PushU32),
-            4 => Some(Self::MakeList),
-            5 => Some(Self::MakeTuple),
-            6 => Some(Self::Neg),
-            7 => Some(Self::Not),
-            8 => Some(Self::Add),
-            9 => Some(Self::Sub),
-            10 => Some(Self::Mul),
-            11 => Some(Self::Div),
-            12 => Some(Self::Rem),
-            13 => Some(Self::Pow),
-            14 => Some(Self::Eq),
-            15 => Some(Self::Lt),
-            16 => Some(Self::Le),
-            17 => Some(Self::Call),
-            18 => Some(Self::AddLocal),
-            19 => Some(Self::AddGlobal),
-            20 => Some(Self::LoadIdx),
-            21 => Some(Self::StoreIdx),
-            22 => Some(Self::Load),
-            23 => Some(Self::Store),
-            24 => Some(Self::Restore),
-            25 => Some(Self::LoadGlobal),
-            26 => Some(Self::StoreGlobal),
-            27 => Some(Self::Jmp),
-            28 => Some(Self::JmpIfNot),
-            29 => Some(Self::Ret),
+            3 => Some(Self::PushBool),
+            4 => Some(Self::PushU32),
+            5 => Some(Self::MakeList),
+            6 => Some(Self::MakeTuple),
+            7 => Some(Self::MakeTable),
+            8 => Some(Self::Neg),
+            9 => Some(Self::Not),
+            10 => Some(Self::Add),
+            11 => Some(Self::Sub),
+            12 => Some(Self::Mul),
+            13 => Some(Self::Div),
+            14 => Some(Self::Rem),
+            15 => Some(Self::Pow),
+            16 => Some(Self::Eq),
+            17 => Some(Self::Lt),
+            18 => Some(Self::Le),
+            19 => Some(Self::Call),
+            20 => Some(Self::CallMethod),
+            21 => Some(Self::AddLocal),
+            22 => Some(Self::AddGlobal),
+            23 => Some(Self::LoadIdx),
+            24 => Some(Self::StoreIdx),
+            25 => Some(Self::Load),
+            26 => Some(Self::Store),
+            27 => Some(Self::Restore),
+            28 => Some(Self::LoadGlobal),
+            29 => Some(Self::StoreGlobal),
+            30 => Some(Self::Jmp),
+            31 => Some(Self::JmpIfNot),
+            32 => Some(Self::Ret),
             _ => None,
         }
     }
@@ -102,10 +108,12 @@ pub enum Op {
     Pop,
     Push(usize),
 
+    PushBool(bool),
     PushU32(u32),
 
     MakeList(usize),
     MakeTuple(usize),
+    MakeTable(usize),
 
     Neg,
     Not,
@@ -123,6 +131,7 @@ pub enum Op {
     Le,
 
     Call(u8),
+    CallMethod(u8, usize),
 
     AddLocal,
     AddGlobal,
@@ -150,9 +159,11 @@ impl Op {
             Self::Nop => OpCode::Nop,
             Self::Pop => OpCode::Pop,
             Self::Push(_) => OpCode::Push,
+            Self::PushBool(_) => OpCode::PushBool,
             Self::PushU32(_) => OpCode::PushU32,
             Self::MakeList(_) => OpCode::MakeList,
             Self::MakeTuple(_) => OpCode::MakeTuple,
+            Self::MakeTable(_) => OpCode::MakeTable,
             Self::Neg => OpCode::Neg,
             Self::Not => OpCode::Not,
             Self::Add => OpCode::Add,
@@ -165,6 +176,7 @@ impl Op {
             Self::Lt => OpCode::Lt,
             Self::Le => OpCode::Le,
             Self::Call(_) => OpCode::Call,
+            Self::CallMethod(_, _) => OpCode::CallMethod,
             Self::AddLocal => OpCode::AddLocal,
             Self::AddGlobal => OpCode::AddGlobal,
             Self::LoadIdx => OpCode::LoadIdx,
@@ -180,21 +192,28 @@ impl Op {
         }
     }
 
-    fn encode_args(&self) -> ChunkBuffer {
+    fn encode_args(&self) -> ChunkBuffer<9> {
+        let mut chunk = ChunkBuffer::new();
         match *self {
+            Self::PushBool(b) => {
+                chunk.push(u8::from(b));
+            }
             Self::Call(arg) => {
-                let mut chunk = ChunkBuffer::new();
                 chunk.push(arg);
-                chunk
+            }
+            Self::CallMethod(arg, name) => {
+                chunk.push(arg);
+                for b in name.to_ne_bytes() {
+                    chunk.push(b);
+                }
             }
             Self::PushU32(arg) => {
-                let mut chunk = ChunkBuffer::new();
                 for b in arg.to_ne_bytes() {
                     chunk.push(b);
                 }
-                chunk
             }
             Self::MakeList(arg)
+            | Self::MakeTable(arg)
             | Self::MakeTuple(arg)
             | Self::Push(arg)
             | Self::Load(arg)
@@ -204,14 +223,13 @@ impl Op {
             | Self::StoreGlobal(arg)
             | Self::Jmp(arg)
             | Self::JmpIfNot(arg) => {
-                let mut chunk = ChunkBuffer::new();
                 for b in arg.to_ne_bytes() {
                     chunk.push(b);
                 }
-                chunk
             }
-            _ => ChunkBuffer::new(),
+            _ => {}
         }
+        chunk
     }
 }
 
@@ -302,7 +320,7 @@ impl ChunkBuilder {
         cur..cur + args.len
     }
 
-    fn push_value(&mut self, value: Value) -> usize {
+    pub fn push_value(&mut self, value: Value) -> usize {
         if let Some(pos) = self.vals.iter().position(|v| v == &value) {
             pos
         } else {
@@ -367,6 +385,20 @@ impl Fetch<u8> for OpStream<'_> {
     }
 }
 
+impl Fetch<bool> for OpStream<'_> {
+    #[inline]
+    fn fetch(&mut self) -> Option<bool> {
+        let byte = self.chunk.ops.get(self.ip).copied()?;
+        let b = match byte {
+            0 => false,
+            1 => true,
+            _ => return None,
+        };
+        self.ip += 1;
+        Some(b)
+    }
+}
+
 impl Fetch<u16> for OpStream<'_> {
     fn fetch(&mut self) -> Option<u16> {
         let at = self.ip;
@@ -413,6 +445,17 @@ impl Fetch<Span> for OpStream<'_> {
     }
 }
 
+impl<T, U> Fetch<(T, U)> for OpStream<'_>
+where
+    Self: Fetch<T> + Fetch<U>,
+{
+    fn fetch(&mut self) -> Option<(T, U)> {
+        let t = self.fetch()?;
+        let u = self.fetch()?;
+        Some((t, u))
+    }
+}
+
 impl Fetch<Op> for OpStream<'_> {
     #[inline]
     fn fetch(&mut self) -> Option<Op> {
@@ -421,9 +464,11 @@ impl Fetch<Op> for OpStream<'_> {
             OpCode::Nop => Some(Op::Nop),
             OpCode::Pop => Some(Op::Pop),
             OpCode::Push => self.fetch().map(Op::Push),
+            OpCode::PushBool => self.fetch().map(Op::PushBool),
             OpCode::PushU32 => self.fetch().map(Op::PushU32),
             OpCode::MakeList => self.fetch().map(Op::MakeList),
             OpCode::MakeTuple => self.fetch().map(Op::MakeTuple),
+            OpCode::MakeTable => self.fetch().map(Op::MakeTable),
             OpCode::Neg => Some(Op::Neg),
             OpCode::Not => Some(Op::Not),
             OpCode::Add => Some(Op::Add),
@@ -436,6 +481,7 @@ impl Fetch<Op> for OpStream<'_> {
             OpCode::Lt => Some(Op::Lt),
             OpCode::Le => Some(Op::Le),
             OpCode::Call => self.fetch().map(Op::Call),
+            OpCode::CallMethod => self.fetch().map(|(t, u)| Op::CallMethod(t, u)),
             OpCode::AddLocal => Some(Op::AddLocal),
             OpCode::AddGlobal => Some(Op::AddGlobal),
             OpCode::LoadIdx => Some(Op::LoadIdx),
@@ -468,6 +514,46 @@ impl<'a> OpStream<'a> {
     }
 }
 
+impl Display for Op {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nop => write!(f, "nop"),
+            Self::Pop => write!(f, "pop"),
+            Self::Push(at) => write!(f, "push data[{at}]"),
+            Self::PushBool(b) => write!(f, "push {b}"),
+            Self::PushU32(x) => write!(f, "push {x}"),
+            Self::MakeList(count) => write!(f, "make list[len = {count}]"),
+            Self::MakeTuple(count) => write!(f, "make tuple[len = {count}]"),
+            Self::MakeTable(count) => write!(f, "make table[len = {count}]"),
+            Self::Neg => write!(f, "neg"),
+            Self::Not => write!(f, "not"),
+            Self::Add => write!(f, "add"),
+            Self::Sub => write!(f, "sub"),
+            Self::Mul => write!(f, "mul"),
+            Self::Div => write!(f, "div"),
+            Self::Rem => write!(f, "rem"),
+            Self::Pow => write!(f, "pow"),
+            Self::Eq => write!(f, "eq"),
+            Self::Lt => write!(f, "lt"),
+            Self::Le => write!(f, "le"),
+            Self::Call(n) => write!(f, "call[count = {n}]"),
+            Self::CallMethod(n, method) => write!(f, "call method[data[{method}], count = {n}]"),
+            Self::AddLocal => write!(f, "add local"),
+            Self::AddGlobal => write!(f, "add global"),
+            Self::LoadIdx => write!(f, "load idx"),
+            Self::StoreIdx => write!(f, "store idx"),
+            Self::Load(at) => write!(f, "load local[{at}]"),
+            Self::Store(at) => write!(f, "store local[{at}]"),
+            Self::Restore(n) => write!(f, "pop local[count = {n}]"),
+            Self::LoadGlobal(at) => write!(f, "load global[{at}]"),
+            Self::StoreGlobal(at) => write!(f, "store global[{at}]"),
+            Self::Jmp(to) => write!(f, "jmp chunk[{to}]"),
+            Self::JmpIfNot(to) => write!(f, "jmp if not chunk[{to}]"),
+            Self::Ret => write!(f, "ret"),
+        }
+    }
+}
+
 impl Display for OpStream<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.chunk.is_empty() {
@@ -477,7 +563,7 @@ impl Display for OpStream<'_> {
         let mut stream = *self;
         let mut ip = stream.ip;
         while let Some(op) = <Self as Fetch<Op>>::fetch(&mut stream) {
-            writeln!(f, "    {ip:<max$}    {op:?}")?;
+            writeln!(f, "    {ip:>max$}:    {op}")?;
             ip = stream.ip;
         }
         Ok(())
@@ -487,7 +573,14 @@ impl Display for OpStream<'_> {
 impl Display for Chunk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let stream = OpStream::new(self);
-        Display::fmt(&stream, f)
+        writeln!(f, "text:")?;
+        write!(f, "{stream}")?;
+        writeln!(f, "data:")?;
+        let max = self.vals.len().ilog10() as usize + 1;
+        for (at, value) in self.vals.iter().enumerate() {
+            writeln!(f, "    {at:>max$}:    {value}")?;
+        }
+        Ok(())
     }
 }
 

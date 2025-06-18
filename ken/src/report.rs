@@ -54,6 +54,8 @@ impl Report for FrameError {
         Diagnostic::error()
             .with_message(self.runtime())
             .with_label(Label::primary((), spans.next().unwrap()))
-            .with_labels_iter(spans.map(|span| Label::secondary((), span)))
+            .with_labels_iter(
+                spans.map(|span| Label::secondary((), span).with_message("from here")),
+            )
     }
 }

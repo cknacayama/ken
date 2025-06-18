@@ -134,7 +134,7 @@ impl Driver {
         let mut parser = Parser::new(tokens);
         let ast = parser.parse_all()?;
 
-        let mut code = Codegen::new("", 0, &mut self.global);
+        let mut code = Codegen::new("_", 0, &mut self.global);
         for stmt in ast {
             code.compile_stmt(stmt)?;
         }

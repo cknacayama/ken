@@ -9,7 +9,9 @@ pub enum TokenKind<'a> {
     Ident(&'a str),
     String(&'a str),
 
+    Dot,
     Comma,
+    Colon,
     Semicolon,
 
     Plus,
@@ -37,6 +39,10 @@ pub enum TokenKind<'a> {
     LBracket,
     RBracket,
 
+    KwTrue,
+    KwFalse,
+    KwTable,
+
     KwFn,
     KwWhile,
     KwIf,
@@ -50,6 +56,9 @@ impl<'a> TokenKind<'a> {
     #[must_use]
     pub fn try_kw(s: &'a str) -> Self {
         match s {
+            "true" => TokenKind::KwTrue,
+            "false" => TokenKind::KwFalse,
+            "table" => TokenKind::KwTable,
             "fn" => TokenKind::KwFn,
             "while" => TokenKind::KwWhile,
             "if" => TokenKind::KwIf,
@@ -77,7 +86,9 @@ impl Display for TokenKind<'_> {
                 write!(f, "{x}")
             }
 
+            Self::Dot => write!(f, "."),
             Self::Comma => write!(f, ","),
+            Self::Colon => write!(f, ":"),
             Self::Semicolon => write!(f, ";"),
 
             Self::Bang => write!(f, "!"),
@@ -103,6 +114,9 @@ impl Display for TokenKind<'_> {
             Self::LBracket => write!(f, "["),
             Self::RBracket => write!(f, "]"),
 
+            Self::KwTable => write!(f, "table"),
+            Self::KwTrue => write!(f, "true"),
+            Self::KwFalse => write!(f, "false"),
             Self::KwFn => write!(f, "fn"),
             Self::KwWhile => write!(f, "while"),
             Self::KwIf => write!(f, "if"),

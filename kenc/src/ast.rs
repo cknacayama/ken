@@ -179,12 +179,21 @@ pub enum StmtKind<'a> {
 }
 
 #[derive(Debug)]
+pub struct TableEntry<'a> {
+    pub key:   Expr<'a>,
+    pub value: Expr<'a>,
+}
+
+#[derive(Debug)]
 pub enum ExprKind<'a> {
     Unit,
     Ident(&'a str),
+    Bool(bool),
     Float(f64),
     Integer(u32),
     String(Cow<'a, str>),
+
+    Table(Box<[TableEntry<'a>]>),
 
     Block(Block<'a>),
 
@@ -212,6 +221,11 @@ pub enum ExprKind<'a> {
     Idx {
         expr: Box<Expr<'a>>,
         idx:  Box<Expr<'a>>,
+    },
+
+    Field {
+        expr:  Box<Expr<'a>>,
+        field: &'a str,
     },
 
     Prefix {

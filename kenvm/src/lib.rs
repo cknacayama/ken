@@ -1,6 +1,8 @@
 pub mod builtin;
 pub mod bytecode;
+pub mod hash;
 pub mod obj;
+pub mod ty;
 pub mod value;
 
 use std::rc::Rc;
@@ -9,7 +11,9 @@ use kenspan::Span;
 
 use crate::builtin::Builtin;
 use crate::bytecode::{Chunk, Fetch, Op, OpStream};
+use crate::hash::{HashValue, Table};
 use crate::obj::{Function, MutObj, Obj};
+use crate::ty::{Ty, TyId, Typed};
 use crate::value::{Value, try_le, try_lt, try_pow};
 
 #[derive(Debug, Clone)]
@@ -56,6 +60,7 @@ impl<'a> Frame<'a> {
 }
 
 pub struct Vm {
+    types:  Vec<Rc<Ty>>,
     stack:  Vec<Value>,
     local:  Vec<Value>,
     global: Vec<Value>,
@@ -68,8 +73,16 @@ impl Default for Vm {
             .copied()
             .map(|b| Value::Obj(Rc::new(Obj::Builtin(b))))
             .collect();
+        let types = (0..TyId::OBJ.get())
+            .map(|id| {
+                let id = TyId::new(id);
+                let data = id.default_data();
+                Rc::new(data)
+            })
+            .collect();
         Self {
             global,
+            types,
             stack: Vec::new(),
             local: Vec::new(),
         }
@@ -77,6 +90,15 @@ impl Default for Vm {
 }
 
 impl Vm {
+    #[must_use]
+    pub fn get_type(&self, id: TyId) -> Option<&Rc<Ty>> {
+        self.types.get(id.get())
+    }
+
+    pub fn get_value_type<T: Typed>(&self, v: &T) -> Option<&Rc<Ty>> {
+        self.get_type(v.ty_id())
+    }
+
     #[must_use]
     const fn sp(&self) -> usize {
         self.stack.len()
@@ -200,11 +222,27 @@ impl Vm {
         let indexed = self.pop_stack()?;
         match (indexed, idx) {
             (Value::MutObj(obj), Value::Int(idx)) => {
-                let idx = usize::try_from(idx).map_err(|_| RuntimeError::OutOfBounds)?;
-                let list = obj.as_list()?;
-                let item = list.get(idx).ok_or(RuntimeError::OutOfBounds)?;
+                let obj = obj.borrow()?;
+                let item = match &*obj {
+                    MutObj::List(values) => values
+                        .get(usize::try_from(idx).map_err(|_| RuntimeError::OutOfBoundsInteger)?)
+                        .ok_or(RuntimeError::OutOfBounds)?,
+                    MutObj::Tuple(values) => values
+                        .get(usize::try_from(idx).map_err(|_| RuntimeError::OutOfBoundsInteger)?)
+                        .ok_or(RuntimeError::OutOfBounds)?,
+                    MutObj::Table(table) => table
+                        .get(&HashValue::Int(idx))
+                        .ok_or(RuntimeError::NoValue)?,
+                    _ => return Err(RuntimeError::TypeError),
+                };
                 self.push_stack(item.clone());
 
+                Ok(Status::Running)
+            }
+            (Value::MutObj(obj), idx) => {
+                let table = obj.as_table()?;
+                let item = table.try_get(&idx)?;
+                self.push_stack(item.clone());
                 Ok(Status::Running)
             }
             _ => Err(RuntimeError::TypeError),
@@ -217,15 +255,65 @@ impl Vm {
         let value = self.pop_stack()?;
         match (indexed, idx) {
             (Value::MutObj(obj), Value::Int(idx)) => {
-                let idx = usize::try_from(idx).map_err(|_| RuntimeError::OutOfBounds)?;
-                let mut list = obj.as_list_mut()?;
-                let item = list.get_mut(idx).ok_or(RuntimeError::OutOfBounds)?;
+                let mut obj = obj.mut_borrow()?;
+                let item = match &mut *obj {
+                    MutObj::List(values) => values
+                        .get_mut(
+                            usize::try_from(idx).map_err(|_| RuntimeError::OutOfBoundsInteger)?,
+                        )
+                        .ok_or(RuntimeError::OutOfBounds)?,
+                    MutObj::Tuple(values) => values
+                        .get_mut(
+                            usize::try_from(idx).map_err(|_| RuntimeError::OutOfBoundsInteger)?,
+                        )
+                        .ok_or(RuntimeError::OutOfBounds)?,
+                    MutObj::Table(table) => table
+                        .get_mut(&HashValue::Int(idx))
+                        .ok_or(RuntimeError::NoValue)?,
+                    _ => return Err(RuntimeError::TypeError),
+                };
                 *item = value;
 
                 Ok(Status::Running)
             }
+            (Value::MutObj(obj), idx) => {
+                let mut table = obj.as_table_mut()?;
+                let item = table.try_get_mut(&idx)?;
+                *item = value;
+                Ok(Status::Running)
+            }
             _ => Err(RuntimeError::TypeError),
         }
+    }
+
+    fn call(&mut self, obj: &Obj, count: usize) -> FrameResult<Value> {
+        match obj {
+            Obj::Function(function) => {
+                if function.arity() != count {
+                    return Err(FrameError::from(RuntimeError::ArityError));
+                }
+                self.eval(function)
+            }
+            Obj::Builtin(builtin) => {
+                let args = self.local_view(count)?;
+                let ret = builtin(self, args)?;
+                self.restore_local(self.lp() - count);
+                Ok(ret)
+            }
+            _ => Err(FrameError::from(RuntimeError::TypeError)),
+        }
+    }
+
+    fn call_method(&mut self, count: usize, name: Value) -> FrameResult<Status> {
+        let name = name.as_obj()?.as_string().ok_or(RuntimeError::TypeError)?;
+        let count = count + 1;
+        self.set_args(count)?;
+        let value = self.local.get(self.lp() - count).unwrap().clone();
+        let ty = self.get_value_type(&value).unwrap().clone();
+        let method = ty.get_method(name).ok_or(RuntimeError::MethodNotFound)?;
+        let ret = self.call(method, count)?;
+        self.push_stack(ret);
+        Ok(Status::Running)
     }
 
     fn eval_next(&mut self, frame: &mut Frame<'_>) -> FrameResult<Status> {
@@ -240,6 +328,12 @@ impl Vm {
 
             Op::Push(at) => {
                 let value = frame.fetch_value(at).ok_or(RuntimeError::NoValue)?;
+                self.push_stack(value);
+                Ok(Status::Running)
+            }
+
+            Op::PushBool(b) => {
+                let value = Value::Bool(b);
                 self.push_stack(value);
                 Ok(Status::Running)
             }
@@ -263,6 +357,20 @@ impl Vm {
                 let list = MutObj::Tuple(values);
                 let list = Value::from(list);
                 self.push_stack(list);
+                Ok(Status::Running)
+            }
+
+            Op::MakeTable(len) => {
+                let values = self.drain(len * 2)?.collect::<Vec<_>>();
+                let mut table = Table::new();
+                for entry in values.chunks_exact(2) {
+                    let [k, v] = entry else { unreachable!() };
+                    let k = k.as_hash().ok_or(RuntimeError::NotHash)?;
+                    table.insert(k, v.clone());
+                }
+                let table = MutObj::Table(table);
+                let table = Value::from(table);
+                self.push_stack(table);
                 Ok(Status::Running)
             }
 
@@ -292,23 +400,14 @@ impl Vm {
                 self.set_args(count)?;
                 let value = self.pop_stack()?;
 
-                let value = match value.as_obj()?.as_ref() {
-                    Obj::Function(function) => {
-                        if function.arity() != count {
-                            return Err(FrameError::from(RuntimeError::ArityError));
-                        }
-                        self.eval(function)?
-                    }
-                    Obj::Builtin(builtin) => {
-                        let args = self.local_view(count)?;
-                        let ret = builtin(args)?;
-                        self.restore_local(self.lp() - count);
-                        ret
-                    }
-                    _ => return Err(FrameError::from(RuntimeError::TypeError)),
-                };
+                let obj = value.as_obj()?;
+                let value = self.call(obj, count)?;
                 self.push_stack(value);
                 Ok(Status::Running)
+            }
+            Op::CallMethod(count, name) => {
+                let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
+                self.call_method(count as usize, name)
             }
             Op::AddLocal => {
                 let value = self.pop_stack()?;
@@ -401,8 +500,14 @@ pub enum RuntimeError {
     GlobalNotFound,
     #[error("fetch error")]
     FetchError,
+    #[error("assertion failed")]
+    AssertFailed,
     #[error("no value")]
     NoValue,
+    #[error("method not found")]
+    MethodNotFound,
+    #[error("not hashable value")]
+    NotHash,
 }
 
 pub struct FrameError {
