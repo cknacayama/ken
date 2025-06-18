@@ -9,7 +9,7 @@ use kenspan::Span;
 
 use crate::builtin::Builtin;
 use crate::bytecode::{Chunk, Fetch, Op, OpStream};
-use crate::obj::{Function, Obj};
+use crate::obj::{Function, MutObj, Obj};
 use crate::value::{Value, try_le, try_lt};
 
 #[derive(Debug, Clone)]
@@ -88,12 +88,8 @@ impl Vm {
         self.local.len()
     }
 
-    fn restore_local(&mut self, lp: usize) -> RuntimeResult<()> {
-        if lp > self.lp() {
-            return Err(RuntimeError::StackUnderflow);
-        }
+    fn restore_local(&mut self, lp: usize) {
         self.local.truncate(lp);
-        Ok(())
     }
 
     fn restore_stack(&mut self, sp: usize) -> RuntimeResult<()> {
@@ -105,17 +101,12 @@ impl Vm {
     }
 
     fn restore_all(&mut self, sp: usize, lp: usize) -> RuntimeResult<()> {
+        self.restore_local(lp);
         self.restore_stack(sp)?;
-        self.restore_local(lp)?;
         Ok(())
     }
 
     pub fn eval(&mut self, function: &Function) -> FrameResult<Value> {
-        let (value, _) = self.run(function)?;
-        Ok(value)
-    }
-
-    fn run<'a>(&mut self, function: &'a Function) -> FrameResult<(Value, Frame<'a>)> {
         let sp = self.sp();
         let lp = self.lp();
 
@@ -133,12 +124,11 @@ impl Vm {
             }
         };
 
-        Ok((ret, frame))
+        Ok(ret)
     }
 
     fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
-        let lp = self.lp();
-        let bp = lp - usize::from(function.arity());
+        let bp = self.lp() - usize::from(function.arity());
         Frame::new(function.chunk(), bp)
     }
 
@@ -150,15 +140,42 @@ impl Vm {
         self.stack.push(value);
     }
 
-    fn drain(&mut self, len: usize) -> RuntimeResult<Vec<Value>> {
+    fn local_view(&self, count: usize) -> RuntimeResult<&[Value]> {
+        let lp = self.lp();
+        if lp < count {
+            return Err(RuntimeError::StackUnderflow);
+        }
+        let view = &self.local[lp - count..];
+        Ok(view)
+    }
+
+    fn set_args(&mut self, count: usize) -> RuntimeResult<()> {
+        match count as usize {
+            0 => {}
+            1 => {
+                let arg = self.pop_stack()?;
+                self.local.push(arg);
+            }
+            count => {
+                let sp = self.sp();
+                if sp < count {
+                    return Err(RuntimeError::StackUnderflow);
+                }
+                let args = self.stack.drain(sp - count..);
+                self.local.extend(args);
+            }
+        }
+        Ok(())
+    }
+
+    fn drain(&mut self, len: usize) -> RuntimeResult<std::vec::Drain<'_, Value>> {
         if self.sp() < len {
             return Err(RuntimeError::StackUnderflow);
         }
-        let mut values = Vec::with_capacity(len);
-        values.extend(self.stack.drain(self.stack.len() - len..));
-        Ok(values)
+        Ok(self.stack.drain(self.stack.len() - len..))
     }
 
+    #[inline]
     fn prefix_op(
         &mut self,
         op: impl FnOnce(Value) -> RuntimeResult<Value>,
@@ -240,15 +257,17 @@ impl Vm {
             }
 
             Op::MakeList(len) => {
-                let values = self.drain(len)?;
-                let list = Value::from(values);
+                let values = self.drain(len)?.collect();
+                let list = MutObj::List(values);
+                let list = Value::from(list);
                 self.push_stack(list);
                 Ok(Status::Running)
             }
 
             Op::MakeTuple(len) => {
-                let values = self.drain(len)?;
-                let list = Value::from(values.into_boxed_slice());
+                let values = self.drain(len)?.collect();
+                let list = MutObj::Tuple(values);
+                let list = Value::from(list);
                 self.push_stack(list);
                 Ok(Status::Running)
             }
@@ -274,27 +293,27 @@ impl Vm {
             Op::Le => self.infix_op(try_le).map_err(FrameError::from),
 
             Op::Call(count) => {
-                let args = self.drain(count as usize)?;
+                let count = count as usize;
+                self.set_args(count)?;
                 let value = self.pop_stack()?;
 
-                match value.as_obj()?.as_ref() {
+                let value = match value.as_obj()?.as_ref() {
                     Obj::Function(function) => {
                         if function.arity() != count {
                             return Err(FrameError::from(RuntimeError::ArityError));
                         }
-                        self.local.extend(args);
-                        let (ret, frame) = self.run(function)?;
-                        self.restore_local(frame.bp())?;
-                        self.push_stack(ret);
-                        Ok(Status::Running)
+                        self.eval(function)?
                     }
                     Obj::Builtin(builtin) => {
-                        let value = builtin(&args)?;
-                        self.push_stack(value);
-                        Ok(Status::Running)
+                        let args = self.local_view(count)?;
+                        let ret = builtin(&args)?;
+                        self.restore_local(self.lp() - count);
+                        ret
                     }
-                    _ => Err(FrameError::from(RuntimeError::TypeError)),
-                }
+                    _ => return Err(FrameError::from(RuntimeError::TypeError)),
+                };
+                self.push_stack(value);
+                Ok(Status::Running)
             }
             Op::AddLocal => {
                 let value = self.pop_stack()?;
@@ -327,7 +346,7 @@ impl Vm {
             }
             Op::Restore(count) => {
                 let lp = self.lp() - count;
-                self.restore_local(lp)?;
+                self.restore_local(lp);
                 Ok(Status::Running)
             }
             Op::LoadGlobal(at) => {

@@ -117,19 +117,14 @@ macro_rules! value_impl {
                 Self::Obj(Rc::new(obj))
             }
         }
+    };
 
-        impl<'a> TryFrom<&'a Value> for &'a $val {
-            type Error = RuntimeError;
-
+    ($val:ty, mut obj $variant:ident) => {
+        impl From<$val> for Value {
             #[inline]
-            fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
-                if let Value::Obj(obj) = value
-                    && let Obj::$variant(obj) = obj.as_ref()
-                {
-                    Ok(obj)
-                } else {
-                    Err(RuntimeError::TypeError)
-                }
+            fn from(value: $val) -> Self {
+                let obj = MutObj::$variant(value);
+                Self::MutObj(MutObjRef::new(obj))
             }
         }
     };
@@ -140,15 +135,13 @@ value_impl!(i64, Int);
 value_impl!(bool, Bool);
 value_impl!(MutObjRef, MutObj);
 value_impl!(Function, obj Function);
+value_impl!(Vec<Value>, mut obj List);
+value_impl!(Box<[Value]>, mut obj Tuple);
 
-impl<T> From<T> for Value
-where
-    MutObj: From<T>,
-{
-    #[inline]
-    fn from(value: T) -> Self {
-        let obj = MutObj::from(value);
-        Self::MutObj(MutObjRef::new(obj))
+impl From<MutObj> for Value {
+    fn from(value: MutObj) -> Self {
+        let obj = MutObjRef::new(value);
+        Self::MutObj(obj)
     }
 }
 

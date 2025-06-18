@@ -166,7 +166,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         let chunk = self.chunk.finish();
         // println!("<fn {}>:", self.name);
         // print!("{chunk}");
-        Function::new(self.arity, chunk)
+        Function::new(self.arity as usize, chunk)
     }
 
     fn compile_many<T>(

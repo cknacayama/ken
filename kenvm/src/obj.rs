@@ -162,13 +162,13 @@ impl MutObjRef {
 
 #[derive(Debug, PartialEq)]
 pub struct Function {
-    arity: u8,
+    arity: usize,
     chunk: Chunk,
 }
 
 impl Function {
     #[must_use]
-    pub const fn new(arity: u8, chunk: Chunk) -> Self {
+    pub const fn new(arity: usize, chunk: Chunk) -> Self {
         Self { arity, chunk }
     }
 
@@ -178,7 +178,7 @@ impl Function {
     }
 
     #[must_use]
-    pub const fn arity(&self) -> u8 {
+    pub const fn arity(&self) -> usize {
         self.arity
     }
 }
