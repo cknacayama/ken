@@ -378,13 +378,9 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         op
     }
 
-    fn compile_int_expr(&mut self, x: i64, span: Span) -> GenSpan {
-        let op = match u32::try_from(x) {
-            Ok(x) => self.push_op(Op::PushInt(x), span),
-            Err(_) => self.push_push(Value::Int(x), span),
-        };
+    fn compile_int_expr(&mut self, x: u32, span: Span) -> GenSpan {
         self.stack += 1;
-        op
+        self.push_op(Op::PushU32(x), span)
     }
 
     fn compile_str_expr(&mut self, s: Cow<'a, str>, span: Span) -> GenSpan {
@@ -478,13 +474,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             InfixOp::Mul => self.push_op(Op::Mul, span),
             InfixOp::Div => self.push_op(Op::Div, span),
             InfixOp::Rem => self.push_op(Op::Rem, span),
-            InfixOp::Pow => {
-                let pow = self
-                    .get_global("pow")
-                    .ok_or_else(|| CodegenError::new(CodegenErrorKind::UndefinedVariable, span))?;
-                self.push_op(Op::LoadGlobal(pow), span);
-                self.push_op(Op::Call(2), span)
-            }
+            InfixOp::Pow => self.push_op(Op::Pow, span),
             InfixOp::Eq => self.push_op(Op::Eq, span),
             InfixOp::Ne => {
                 self.push_op(Op::Eq, span);

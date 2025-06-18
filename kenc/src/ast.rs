@@ -183,7 +183,7 @@ pub enum ExprKind<'a> {
     Unit,
     Ident(&'a str),
     Float(f64),
-    Integer(i64),
+    Integer(u32),
     String(Cow<'a, str>),
 
     Block(Block<'a>),

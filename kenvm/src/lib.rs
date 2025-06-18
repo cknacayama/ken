@@ -10,7 +10,7 @@ use kenspan::Span;
 use crate::builtin::Builtin;
 use crate::bytecode::{Chunk, Fetch, Op, OpStream};
 use crate::obj::{Function, MutObj, Obj};
-use crate::value::{Value, try_le, try_lt};
+use crate::value::{Value, try_le, try_lt, try_pow};
 
 #[derive(Debug, Clone)]
 enum Status {
@@ -33,12 +33,11 @@ impl<'a> Frame<'a> {
         }
     }
 
-    #[inline]
     fn fetch<T>(&mut self) -> RuntimeResult<T>
     where
         OpStream<'a>: Fetch<T>,
     {
-        Fetch::<T>::fetch(&mut self.stream).ok_or(RuntimeError::FetchError)
+        self.stream.fetch().ok_or(RuntimeError::FetchError)
     }
 
     #[must_use]
@@ -127,8 +126,8 @@ impl Vm {
         Ok(ret)
     }
 
-    fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
-        let bp = self.lp() - usize::from(function.arity());
+    const fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
+        let bp = self.lp() - function.arity();
         Frame::new(function.chunk(), bp)
     }
 
@@ -150,7 +149,7 @@ impl Vm {
     }
 
     fn set_args(&mut self, count: usize) -> RuntimeResult<()> {
-        match count as usize {
+        match count {
             0 => {}
             1 => {
                 let arg = self.pop_stack()?;
@@ -175,7 +174,6 @@ impl Vm {
         Ok(self.stack.drain(self.stack.len() - len..))
     }
 
-    #[inline]
     fn prefix_op(
         &mut self,
         op: impl FnOnce(Value) -> RuntimeResult<Value>,
@@ -186,7 +184,6 @@ impl Vm {
         Ok(Status::Running)
     }
 
-    #[inline]
     fn infix_op(
         &mut self,
         op: impl FnOnce(Value, Value) -> RuntimeResult<Value>,
@@ -198,7 +195,6 @@ impl Vm {
         Ok(Status::Running)
     }
 
-    #[inline]
     fn load_idx(&mut self) -> RuntimeResult<Status> {
         let idx = self.pop_stack()?;
         let indexed = self.pop_stack()?;
@@ -215,7 +211,6 @@ impl Vm {
         }
     }
 
-    #[inline]
     fn store_idx(&mut self) -> RuntimeResult<Status> {
         let idx = self.pop_stack()?;
         let indexed = self.pop_stack()?;
@@ -233,7 +228,6 @@ impl Vm {
         }
     }
 
-    #[inline]
     fn eval_next(&mut self, frame: &mut Frame<'_>) -> FrameResult<Status> {
         let op = frame.fetch()?;
 
@@ -250,7 +244,7 @@ impl Vm {
                 Ok(Status::Running)
             }
 
-            Op::PushInt(int) => {
+            Op::PushU32(int) => {
                 let value = Value::Int(i64::from(int));
                 self.push_stack(value);
                 Ok(Status::Running)
@@ -277,6 +271,7 @@ impl Vm {
             Op::Mul => self.infix_op(|a, b| a * b).map_err(FrameError::from),
             Op::Div => self.infix_op(|a, b| a / b).map_err(FrameError::from),
             Op::Rem => self.infix_op(|a, b| a % b).map_err(FrameError::from),
+            Op::Pow => self.infix_op(try_pow).map_err(FrameError::from),
 
             Op::Neg => self.prefix_op(|x| -x).map_err(FrameError::from),
             Op::Not => self.prefix_op(|x| !x).map_err(FrameError::from),
@@ -306,7 +301,7 @@ impl Vm {
                     }
                     Obj::Builtin(builtin) => {
                         let args = self.local_view(count)?;
-                        let ret = builtin(&args)?;
+                        let ret = builtin(args)?;
                         self.restore_local(self.lp() - count);
                         ret
                     }

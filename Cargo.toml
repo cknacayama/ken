@@ -4,8 +4,9 @@ members = ["ken", "kenc", "kenspan", "kenvm"]
 
 [profile.release]
 debug = 2
-# lto = true
-# codegen-units = 1
+
+[profile.release.package.kenvm]
+codegen-units = 1
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

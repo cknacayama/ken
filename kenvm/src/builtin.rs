@@ -29,30 +29,11 @@ fn get_arg(args: &[Value], pos: usize) -> RuntimeResult<&Value> {
     args.get(pos).ok_or(RuntimeError::NotEnoughArgs)
 }
 
-fn pow(args: &[Value]) -> RuntimeResult<Value> {
-    let lhs = get_arg(args, 0)?;
-    let rhs = get_arg(args, 1)?;
-    let x = match (lhs, rhs) {
-        (Value::Float(lhs), Value::Float(rhs)) => lhs.powf(*rhs),
-        _ => return Err(RuntimeError::TypeError),
-    };
-    Ok(Value::Float(x))
-}
-
 fn push(args: &[Value]) -> RuntimeResult<Value> {
     let mut list = get_arg(args, 0)?.as_mut_obj()?.as_list_mut()?;
     let item = get_arg(args, 1)?;
     list.push(item.clone());
     Ok(Value::Unit)
-}
-
-fn try_cast_int<T>(from: T) -> RuntimeResult<Value>
-where
-    i64: TryFrom<T>,
-{
-    from.try_into()
-        .map_err(|_| RuntimeError::OutOfBoundsInteger)
-        .map(Value::Int)
 }
 
 fn len(args: &[Value]) -> RuntimeResult<Value> {
@@ -91,6 +72,15 @@ impl Builtin {
     }
 }
 
+fn try_cast_int<T>(from: T) -> RuntimeResult<Value>
+where
+    i64: TryFrom<T>,
+{
+    from.try_into()
+        .map_err(|_| RuntimeError::OutOfBoundsInteger)
+        .map(Value::Int)
+}
+
 impl PartialEq for Builtin {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
@@ -114,11 +104,8 @@ impl Display for Builtin {
 }
 
 macro_rules! core_bultins {
-    [] => {
-        []
-    };
-    [$($name:ident),+ $(,)?] => {
-        [$(Builtin::$name()),+]
+    [$($name:ident),* $(,)?] => {
+        [$(Builtin::$name()),*]
     };
 }
 
@@ -128,7 +115,6 @@ macro_rules! impl_core {
             const CORE_LEN: usize = core_bultins![$($name),*].len();
             const CORE: [Builtin; Self::CORE_LEN] = core_bultins![$($name),*];
 
-            #[inline]
             #[must_use]
             pub const fn core_builtins() -> &'static [Builtin] {
                 &Self::CORE
@@ -144,4 +130,4 @@ macro_rules! impl_core {
     };
 }
 
-impl_core![print, println, pow, push, len];
+impl_core![print, println, push, len];

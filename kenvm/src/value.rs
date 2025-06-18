@@ -66,7 +66,6 @@ macro_rules! infix_impl {
         impl $trayt for Value {
             type Output = RuntimeResult<Value>;
 
-            #[inline]
             fn $op(self, rhs: Self) -> Self::Output {
                 match (self, rhs) {
                     (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Int($trayt::$op(lhs, rhs))),
@@ -89,7 +88,6 @@ macro_rules! infix_impl {
 macro_rules! value_impl {
     ($val:ty, $variant:ident) => {
         impl From<$val> for Value {
-            #[inline]
             fn from(value: $val) -> Self {
                 Self::$variant(value)
             }
@@ -98,7 +96,6 @@ macro_rules! value_impl {
         impl TryFrom<Value> for $val {
             type Error = RuntimeError;
 
-            #[inline]
             fn try_from(value: Value) -> Result<Self, Self::Error> {
                 if let Value::$variant(value) = value {
                     Ok(value)
@@ -111,7 +108,6 @@ macro_rules! value_impl {
 
     ($val:ty, obj $variant:ident) => {
         impl From<$val> for Value {
-            #[inline]
             fn from(value: $val) -> Self {
                 let obj = Obj::$variant(value);
                 Self::Obj(Rc::new(obj))
@@ -121,7 +117,6 @@ macro_rules! value_impl {
 
     ($val:ty, mut obj $variant:ident) => {
         impl From<$val> for Value {
-            #[inline]
             fn from(value: $val) -> Self {
                 let obj = MutObj::$variant(value);
                 Self::MutObj(MutObjRef::new(obj))
@@ -152,7 +147,6 @@ infix_impl!(Mul::mul);
 impl Div for Value {
     type Output = RuntimeResult<Self>;
 
-    #[inline]
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Self::Int(lhs), Self::Int(rhs)) => lhs
@@ -170,7 +164,6 @@ impl Div for Value {
 impl Rem for Value {
     type Output = RuntimeResult<Self>;
 
-    #[inline]
     fn rem(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Self::Int(lhs), Self::Int(rhs)) => lhs
@@ -188,7 +181,6 @@ impl Rem for Value {
 impl Neg for Value {
     type Output = RuntimeResult<Self>;
 
-    #[inline]
     fn neg(self) -> Self::Output {
         match self {
             Self::Int(int) => Ok(Self::Int(-int)),
@@ -201,7 +193,6 @@ impl Neg for Value {
 impl Not for Value {
     type Output = RuntimeResult<Self>;
 
-    #[inline]
     fn not(self) -> Self::Output {
         match self {
             Self::Bool(b) => Ok(Self::Bool(!b)),
@@ -210,7 +201,36 @@ impl Not for Value {
     }
 }
 
-#[inline]
+pub(crate) fn try_pow(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
+    match (lhs, rhs) {
+        (Value::Float(lhs), Value::Float(rhs)) => Ok(Value::Float(lhs.powf(rhs))),
+        (Value::Float(lhs), Value::Int(rhs)) => {
+            let rhs = rhs
+                .try_into()
+                .map_err(|_| RuntimeError::OutOfBoundsInteger)?;
+            Ok(Value::Float(lhs.powi(rhs)))
+        }
+        (Value::Int(lhs), Value::Float(rhs)) => {
+            let lhs = lhs as f64;
+            Ok(Value::Float(lhs.powf(rhs)))
+        }
+        (Value::Int(lhs), Value::Int(rhs @ 0..)) => {
+            let rhs = rhs
+                .try_into()
+                .map_err(|_| RuntimeError::OutOfBoundsInteger)?;
+            Ok(Value::Int(lhs.pow(rhs)))
+        }
+        (Value::Int(lhs), Value::Int(rhs)) => {
+            let lhs = lhs as f64;
+            let rhs = rhs
+                .try_into()
+                .map_err(|_| RuntimeError::OutOfBoundsInteger)?;
+            Ok(Value::Float(lhs.powi(rhs)))
+        }
+        _ => Err(RuntimeError::TypeError),
+    }
+}
+
 pub(crate) fn try_lt(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
     let result = match (lhs, rhs) {
         (Value::Int(lhs), Value::Int(rhs)) => lhs < rhs,
@@ -222,7 +242,6 @@ pub(crate) fn try_lt(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
     Ok(Value::Bool(result))
 }
 
-#[inline]
 pub(crate) fn try_le(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
     let result = match (lhs, rhs) {
         (Value::Int(lhs), Value::Int(rhs)) => lhs <= rhs,

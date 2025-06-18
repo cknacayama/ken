@@ -111,7 +111,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn number(&mut self) -> Token<'a> {
-        self.eat_while(|c| c.is_ascii_digit());
+        self.eat_while(|c| c.is_ascii_digit() || c == '_');
 
         let kind = if self.first() == '.' && self.second().is_ascii_digit() {
             self.bump();

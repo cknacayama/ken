@@ -12,7 +12,7 @@ enum OpCode {
     Pop,
     Push,
 
-    PushInt,
+    PushU32,
 
     MakeList,
     MakeTuple,
@@ -25,6 +25,7 @@ enum OpCode {
     Mul,
     Div,
     Rem,
+    Pow,
 
     Eq,
     Lt,
@@ -53,12 +54,13 @@ enum OpCode {
 }
 
 impl OpCode {
+    #[inline]
     const fn decode(byte: u8) -> Option<Self> {
         match byte {
             0 => Some(Self::Nop),
             1 => Some(Self::Pop),
             2 => Some(Self::Push),
-            3 => Some(Self::PushInt),
+            3 => Some(Self::PushU32),
             4 => Some(Self::MakeList),
             5 => Some(Self::MakeTuple),
             6 => Some(Self::Neg),
@@ -68,22 +70,23 @@ impl OpCode {
             10 => Some(Self::Mul),
             11 => Some(Self::Div),
             12 => Some(Self::Rem),
-            13 => Some(Self::Eq),
-            14 => Some(Self::Lt),
-            15 => Some(Self::Le),
-            16 => Some(Self::Call),
-            17 => Some(Self::AddLocal),
-            18 => Some(Self::AddGlobal),
-            19 => Some(Self::LoadIdx),
-            20 => Some(Self::StoreIdx),
-            21 => Some(Self::Load),
-            22 => Some(Self::Store),
-            23 => Some(Self::Restore),
-            24 => Some(Self::LoadGlobal),
-            25 => Some(Self::StoreGlobal),
-            26 => Some(Self::Jmp),
-            27 => Some(Self::JmpIfNot),
-            28 => Some(Self::Ret),
+            13 => Some(Self::Pow),
+            14 => Some(Self::Eq),
+            15 => Some(Self::Lt),
+            16 => Some(Self::Le),
+            17 => Some(Self::Call),
+            18 => Some(Self::AddLocal),
+            19 => Some(Self::AddGlobal),
+            20 => Some(Self::LoadIdx),
+            21 => Some(Self::StoreIdx),
+            22 => Some(Self::Load),
+            23 => Some(Self::Store),
+            24 => Some(Self::Restore),
+            25 => Some(Self::LoadGlobal),
+            26 => Some(Self::StoreGlobal),
+            27 => Some(Self::Jmp),
+            28 => Some(Self::JmpIfNot),
+            29 => Some(Self::Ret),
             _ => None,
         }
     }
@@ -98,7 +101,8 @@ pub enum Op {
 
     Pop,
     Push(usize),
-    PushInt(u32),
+
+    PushU32(u32),
 
     MakeList(usize),
     MakeTuple(usize),
@@ -111,6 +115,7 @@ pub enum Op {
     Mul,
     Div,
     Rem,
+    Pow,
 
     Eq,
 
@@ -145,7 +150,7 @@ impl Op {
             Self::Nop => OpCode::Nop,
             Self::Pop => OpCode::Pop,
             Self::Push(_) => OpCode::Push,
-            Self::PushInt(_) => OpCode::PushInt,
+            Self::PushU32(_) => OpCode::PushU32,
             Self::MakeList(_) => OpCode::MakeList,
             Self::MakeTuple(_) => OpCode::MakeTuple,
             Self::Neg => OpCode::Neg,
@@ -155,6 +160,7 @@ impl Op {
             Self::Mul => OpCode::Mul,
             Self::Div => OpCode::Div,
             Self::Rem => OpCode::Rem,
+            Self::Pow => OpCode::Pow,
             Self::Eq => OpCode::Eq,
             Self::Lt => OpCode::Lt,
             Self::Le => OpCode::Le,
@@ -181,7 +187,7 @@ impl Op {
                 chunk.push(arg);
                 chunk
             }
-            Self::PushInt(arg) => {
+            Self::PushU32(arg) => {
                 let mut chunk = ChunkBuffer::new();
                 for b in arg.to_ne_bytes() {
                     chunk.push(b);
@@ -335,7 +341,6 @@ impl Chunk {
         self.spans.get(at).copied()
     }
 
-    #[inline]
     #[must_use]
     fn fetch_value(&self, at: usize) -> Option<Value> {
         self.vals.get(at).cloned()
@@ -362,8 +367,18 @@ impl Fetch<u8> for OpStream<'_> {
     }
 }
 
+impl Fetch<u16> for OpStream<'_> {
+    fn fetch(&mut self) -> Option<u16> {
+        let at = self.ip;
+        let slice = self.chunk.ops.get(at..at + size_of::<u16>())?;
+        let bytes = slice.try_into().unwrap();
+        let word = u16::from_ne_bytes(bytes);
+        self.ip += size_of::<u16>();
+        Some(word)
+    }
+}
+
 impl Fetch<u32> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<u32> {
         let at = self.ip;
         let slice = self.chunk.ops.get(at..at + size_of::<u32>())?;
@@ -375,7 +390,6 @@ impl Fetch<u32> for OpStream<'_> {
 }
 
 impl Fetch<usize> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<usize> {
         let at = self.ip;
         let slice = self.chunk.ops.get(at..at + size_of::<usize>())?;
@@ -389,12 +403,11 @@ impl Fetch<usize> for OpStream<'_> {
 impl Fetch<OpCode> for OpStream<'_> {
     #[inline]
     fn fetch(&mut self) -> Option<OpCode> {
-        Fetch::<u8>::fetch(self).and_then(OpCode::decode)
+        self.fetch().and_then(OpCode::decode)
     }
 }
 
 impl Fetch<Span> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<Span> {
         self.chunk.fetch_span(self.ip - 1)
     }
@@ -408,7 +421,7 @@ impl Fetch<Op> for OpStream<'_> {
             OpCode::Nop => Some(Op::Nop),
             OpCode::Pop => Some(Op::Pop),
             OpCode::Push => self.fetch().map(Op::Push),
-            OpCode::PushInt => self.fetch().map(Op::PushInt),
+            OpCode::PushU32 => self.fetch().map(Op::PushU32),
             OpCode::MakeList => self.fetch().map(Op::MakeList),
             OpCode::MakeTuple => self.fetch().map(Op::MakeTuple),
             OpCode::Neg => Some(Op::Neg),
@@ -418,6 +431,7 @@ impl Fetch<Op> for OpStream<'_> {
             OpCode::Mul => Some(Op::Mul),
             OpCode::Div => Some(Op::Div),
             OpCode::Rem => Some(Op::Rem),
+            OpCode::Pow => Some(Op::Pow),
             OpCode::Eq => Some(Op::Eq),
             OpCode::Lt => Some(Op::Lt),
             OpCode::Le => Some(Op::Le),
@@ -449,7 +463,6 @@ impl<'a> OpStream<'a> {
         self.chunk.fetch_value(at)
     }
 
-    #[inline]
     pub(crate) const fn jump(&mut self, to: usize) {
         self.ip = to;
     }

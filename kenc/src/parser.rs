@@ -16,6 +16,8 @@ pub enum ParseErrorKind {
     InvalidEscape,
     #[error("invalid expression")]
     InvalidExpr,
+    #[error("integer literal greater than {}", u32::MAX)]
+    IntegerTooBig,
     #[error("expected expression")]
     ExpectedExpr,
     #[error("expected item")]
@@ -421,16 +423,27 @@ impl<'a> Parser<'a> {
                 Ok(Expr::new(kind, span))
             }
             TokenKind::Float(lit) => {
-                let kind = ExprKind::Float(lit.parse().unwrap());
+                let x = Self::parse_number(lit).unwrap();
+                let kind = ExprKind::Float(x);
                 Ok(Expr::new(kind, span))
             }
             TokenKind::Integer(lit) => {
-                let kind = ExprKind::Integer(lit.parse().unwrap());
+                let x = Self::parse_number(lit)
+                    .map_err(|_| ParseError::new(ParseErrorKind::IntegerTooBig, span))?;
+                let kind = ExprKind::Integer(x);
                 Ok(Expr::new(kind, span))
             }
 
             _ => Err(ParseError::new(ParseErrorKind::InvalidExpr, span)),
         }
+    }
+
+    fn parse_number<N>(s: &str) -> Result<N, N::Err>
+    where
+        N: std::str::FromStr,
+    {
+        let s = s.chars().filter(|c| *c != '_').collect::<String>();
+        s.parse()
     }
 
     fn parse_string(s: &'a str, span: Span) -> ParseResult<Expr<'a>> {

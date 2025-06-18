@@ -10,7 +10,6 @@ pub struct Span {
 
 impl Span {
     #[must_use]
-    #[inline]
     pub const fn new(lo: u32, hi: u32) -> Self {
         if hi < lo {
             Self { lo: hi, hi: lo }
@@ -20,19 +19,16 @@ impl Span {
     }
 
     #[must_use]
-    #[inline]
     pub const fn len(self) -> u32 {
         self.hi - self.lo
     }
 
     #[must_use]
-    #[inline]
     pub const fn is_empty(self) -> bool {
         self.len() == 0
     }
 
     #[must_use]
-    #[inline]
     pub fn join(self, other: Self) -> Self {
         let lo = std::cmp::min(self.lo, other.lo);
         let hi = std::cmp::max(self.hi, other.hi);
@@ -41,13 +37,11 @@ impl Span {
     }
 
     #[must_use]
-    #[inline]
     pub const fn lo(self) -> u32 {
         self.lo
     }
 
     #[must_use]
-    #[inline]
     pub const fn hi(self) -> u32 {
         self.hi
     }
@@ -74,12 +68,10 @@ impl<T: Display> Display for Spand<T> {
 impl<T: Error> Error for Spand<T> {}
 
 impl<T> Spand<T> {
-    #[inline]
     pub const fn new(kind: T, span: Span) -> Self {
         Self { kind, span }
     }
 
-    #[inline]
     pub const fn kind(&self) -> &T {
         &self.kind
     }

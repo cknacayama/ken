@@ -17,21 +17,18 @@ pub enum Obj {
 }
 
 impl From<Rc<str>> for Obj {
-    #[inline]
     fn from(v: Rc<str>) -> Self {
         Self::String(v)
     }
 }
 
 impl From<Builtin> for Obj {
-    #[inline]
     fn from(v: Builtin) -> Self {
         Self::Builtin(v)
     }
 }
 
 impl From<Function> for Obj {
-    #[inline]
     fn from(v: Function) -> Self {
         Self::Function(v)
     }
@@ -45,21 +42,18 @@ pub enum MutObj {
 }
 
 impl From<Box<[Value]>> for MutObj {
-    #[inline]
     fn from(v: Box<[Value]>) -> Self {
         Self::Tuple(v)
     }
 }
 
 impl From<Closure> for MutObj {
-    #[inline]
     fn from(v: Closure) -> Self {
         Self::Closure(v)
     }
 }
 
 impl From<Vec<Value>> for MutObj {
-    #[inline]
     fn from(v: Vec<Value>) -> Self {
         Self::List(v)
     }
