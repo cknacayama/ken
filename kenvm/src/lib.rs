@@ -22,7 +22,7 @@ enum Status {
     Finished(Value),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Frame<'a> {
     stream: OpStream<'a>,
     bp:     usize,
@@ -62,7 +62,6 @@ impl<'a> Frame<'a> {
 pub struct Vm {
     types:  Vec<Rc<Ty>>,
     stack:  Vec<Value>,
-    local:  Vec<Value>,
     global: Vec<Value>,
 }
 
@@ -84,7 +83,6 @@ impl Default for Vm {
             global,
             types,
             stack: Vec::new(),
-            local: Vec::new(),
         }
     }
 }
@@ -104,32 +102,16 @@ impl Vm {
         self.stack.len()
     }
 
-    #[must_use]
-    const fn lp(&self) -> usize {
-        self.local.len()
-    }
-
-    fn restore_local(&mut self, lp: usize) {
-        self.local.truncate(lp);
-    }
-
-    fn restore_stack(&mut self, sp: usize) -> RuntimeResult<()> {
-        if sp > self.sp() {
-            return Err(RuntimeError::StackUnderflow);
-        }
-        self.stack.truncate(sp);
-        Ok(())
-    }
-
-    fn restore_all(&mut self, sp: usize, lp: usize) -> RuntimeResult<()> {
-        self.restore_local(lp);
-        self.restore_stack(sp)?;
-        Ok(())
+    fn restore(&mut self, bp: usize) {
+        self.stack.truncate(bp);
     }
 
     pub fn eval(&mut self, function: &Function) -> FrameResult<Value> {
+        self.eval_function(function)
+    }
+
+    fn eval_function(&mut self, function: &Function) -> FrameResult<Value> {
         let sp = self.sp();
-        let lp = self.lp();
 
         let mut frame = self.create_frame(function);
         let ret = loop {
@@ -138,7 +120,7 @@ impl Vm {
                 Ok(Status::Finished(ret)) => break ret,
                 Err(mut err) => {
                     let span = frame.fetch().unwrap_or_default();
-                    let _ = self.restore_all(sp, lp);
+                    self.restore(sp);
                     err.spans.push(span);
                     return Err(err);
                 }
@@ -149,7 +131,7 @@ impl Vm {
     }
 
     const fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
-        let bp = self.lp() - function.arity();
+        let bp = self.sp() - function.arity();
         Frame::new(function.chunk(), bp)
     }
 
@@ -157,36 +139,18 @@ impl Vm {
         self.stack.pop().ok_or(RuntimeError::StackUnderflow)
     }
 
+    #[inline]
     fn push_stack(&mut self, value: Value) {
         self.stack.push(value);
     }
 
     fn local_view(&self, count: usize) -> RuntimeResult<&[Value]> {
-        let lp = self.lp();
-        if lp < count {
+        let sp = self.sp();
+        if sp < count {
             return Err(RuntimeError::StackUnderflow);
         }
-        let view = &self.local[lp - count..];
+        let view = &self.stack[sp - count..];
         Ok(view)
-    }
-
-    fn set_args(&mut self, count: usize) -> RuntimeResult<()> {
-        match count {
-            0 => {}
-            1 => {
-                let arg = self.pop_stack()?;
-                self.local.push(arg);
-            }
-            count => {
-                let sp = self.sp();
-                if sp < count {
-                    return Err(RuntimeError::StackUnderflow);
-                }
-                let args = self.stack.drain(sp - count..);
-                self.local.extend(args);
-            }
-        }
-        Ok(())
     }
 
     fn drain(&mut self, len: usize) -> RuntimeResult<std::vec::Drain<'_, Value>> {
@@ -286,37 +250,35 @@ impl Vm {
         }
     }
 
+    #[inline]
     fn call(&mut self, obj: &Obj, count: usize) -> FrameResult<Value> {
         match obj {
             Obj::Function(function) => {
                 if function.arity() != count {
                     return Err(FrameError::from(RuntimeError::ArityError));
                 }
-                self.eval(function)
+                self.eval_function(function)
             }
             Obj::Builtin(builtin) => {
                 let args = self.local_view(count)?;
                 let ret = builtin(self, args)?;
-                self.restore_local(self.lp() - count);
+                self.restore(self.sp() - count);
                 Ok(ret)
             }
             _ => Err(FrameError::from(RuntimeError::TypeError)),
         }
     }
 
-    fn call_method(&mut self, count: usize, name: Value) -> FrameResult<Status> {
+    fn call_method(&mut self, count: usize, name: &Value) -> FrameResult<Value> {
         let name = name.as_obj()?.as_string().ok_or(RuntimeError::TypeError)?;
         let count = count + 1;
-        self.set_args(count)?;
-        let value = self.local.get(self.lp() - count).unwrap().clone();
+        let value = self.stack.get(self.sp() - count).unwrap().clone();
         let ty = self.get_value_type(&value).unwrap().clone();
         let method = ty.get_method(name).ok_or(RuntimeError::MethodNotFound)?;
-        let ret = self.call(method, count)?;
-        self.push_stack(ret);
-        Ok(Status::Running)
+        self.call(method, count)
     }
 
-    fn eval_next(&mut self, frame: &mut Frame<'_>) -> FrameResult<Status> {
+    fn eval_next(&mut self, frame: &mut Frame) -> FrameResult<Status> {
         let op = frame.fetch()?;
 
         match op {
@@ -397,21 +359,26 @@ impl Vm {
 
             Op::Call(count) => {
                 let count = count as usize;
-                self.set_args(count)?;
-                let value = self.pop_stack()?;
+                if count + 1 > self.sp() {
+                    return Err(FrameError::from(RuntimeError::StackUnderflow));
+                }
+                let value = self.stack[self.sp() - count - 1].clone();
 
                 let obj = value.as_obj()?;
-                let value = self.call(obj, count)?;
-                self.push_stack(value);
+                let ret = self.call(obj, count)?;
+                self.pop_stack()?;
+                self.push_stack(ret);
                 Ok(Status::Running)
             }
             Op::CallMethod(count, name) => {
                 let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
-                self.call_method(count as usize, name)
+                let ret = self.call_method(count as usize, &name)?;
+                self.push_stack(ret);
+                Ok(Status::Running)
             }
             Op::AddLocal => {
                 let value = self.pop_stack()?;
-                self.local.push(value);
+                self.stack.push(value);
                 Ok(Status::Running)
             }
             Op::AddGlobal => {
@@ -423,7 +390,7 @@ impl Vm {
             Op::StoreIdx => self.store_idx().map_err(FrameError::from),
             Op::Load(at) => {
                 let value = self
-                    .local
+                    .stack
                     .get(frame.bp() + at)
                     .ok_or(RuntimeError::LocalNotFound)?;
                 self.push_stack(value.clone());
@@ -431,16 +398,22 @@ impl Vm {
             }
             Op::Store(at) => {
                 let value = self.pop_stack()?;
+                let bp = frame.bp();
                 let local = self
-                    .local
-                    .get_mut(frame.bp() + at)
+                    .stack
+                    .get_mut(bp + at)
                     .ok_or(RuntimeError::LocalNotFound)?;
                 *local = value;
                 Ok(Status::Running)
             }
             Op::Restore(count) => {
-                let lp = self.lp() - count;
-                self.restore_local(lp);
+                let value = self.pop_stack()?;
+                if count > self.sp() {
+                    return Err(FrameError::from(RuntimeError::StackUnderflow));
+                }
+                let lp = self.sp() - count;
+                self.restore(lp);
+                self.push_stack(value);
                 Ok(Status::Running)
             }
             Op::LoadGlobal(at) => {
@@ -470,6 +443,7 @@ impl Vm {
             }
             Op::Ret => {
                 let ret = self.pop_stack()?;
+                self.restore(frame.bp());
                 Ok(Status::Finished(ret))
             }
         }
@@ -510,6 +484,7 @@ pub enum RuntimeError {
     NotHash,
 }
 
+#[derive(Debug)]
 pub struct FrameError {
     runtime: RuntimeError,
     spans:   Vec<Span>,
@@ -538,3 +513,24 @@ impl From<RuntimeError> for FrameError {
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 pub type FrameResult<T> = Result<T, FrameError>;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::bytecode::ChunkBuilder;
+
+    #[test]
+    fn test_add() {
+        let mut vm = Vm::default();
+        let mut builder = ChunkBuilder::new();
+        let span = Span::default();
+        builder.push_op(Op::PushU32(1), span);
+        builder.push_op(Op::PushU32(2), span);
+        builder.push_op(Op::Add, span);
+        builder.push_op(Op::Ret, span);
+        let chunk = builder.finish();
+        let function = Function::new(None, 0, chunk);
+        let result = vm.eval(&function).unwrap();
+        assert_eq!(result, Value::Int(3));
+    }
+}

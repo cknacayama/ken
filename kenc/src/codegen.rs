@@ -93,27 +93,23 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         self.name
     }
 
-    const fn stack_is_empty(&self) -> bool {
-        self.stack == 0
-    }
-
     fn begin_scope(&mut self) -> usize {
         self.scope.push(HashMap::default());
         self.stack
     }
 
-    fn end_scope(&mut self, span: Span) -> GenSpan {
+    fn end_scope(&mut self, span: Span) -> Option<GenSpan> {
         let scope = self.scope.pop().unwrap();
         if scope.is_empty() {
-            self.push_op(Op::Nop, span)
+            None
         } else {
-            self.push_op(Op::Restore(scope.len()), span)
+            Some(self.push_op(Op::Restore(scope.len()), span))
         }
     }
 
     fn add_variable(&mut self, name: &'a str) -> bool {
         if let Some(scope) = self.scope.last_mut() {
-            let pos = self.local;
+            let pos = self.local + self.stack;
             self.local += 1;
             scope.insert(name, pos);
             true
@@ -261,7 +257,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             codegen.add_variable(param);
         }
         let body = codegen.compile_block(body)?;
-        codegen.end_scope(span);
+        codegen.scope.pop().unwrap();
 
         let f = Value::from(codegen.finish());
         self.push_push(f, span);
@@ -281,8 +277,8 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             self.push_unit(span)
         };
 
-        let end = self.bind_variable(local.name, span);
         self.dec_stack(1);
+        let end = self.bind_variable(local.name, span);
 
         Ok(bind.join(end))
     }
@@ -419,13 +415,15 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
 
     fn compile_block(&mut self, Block { stmts, span }: Block<'a>) -> CodegenResult<GenSpan> {
         let stack = self.begin_scope();
-        let mut stmts = self.compile_many(stmts, Self::compile_stmt)?;
-        if self.stack == stack {
+        let stmts = self.compile_many(stmts, Self::compile_stmt)?;
+        let stmts = if self.stack == stack {
             let unit = self.push_unit(span);
-            stmts = Some(stmts.unwrap_or(unit));
-        }
+            stmts.map_or(unit, |stmts| stmts.join(unit))
+        } else {
+            stmts.unwrap()
+        };
         let end = self.end_scope(span);
-        let span = stmts.map_or(end, |span| span.join(end));
+        let span = end.map_or(stmts, |end| stmts.join(end));
         Ok(span)
     }
 
@@ -568,7 +566,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     }
 
     fn push_ret(&mut self) {
-        if self.stack_is_empty() {
+        if self.stack == 0 {
             self.push_unit(Span::default());
         }
         self.push_op(Op::Ret, Span::default());

@@ -16,9 +16,9 @@ fn main() {
     while i < list.len() {
         list[i] = list[i] * 2;
         i = i + 1;
-    }
+    };
 
     println(list);
 }
 
-main();
+println(main());

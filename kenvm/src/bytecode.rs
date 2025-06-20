@@ -57,7 +57,6 @@ enum OpCode {
 }
 
 impl OpCode {
-    #[inline]
     const fn decode(byte: u8) -> Option<Self> {
         match byte {
             0 => Some(Self::Nop),
@@ -377,7 +376,6 @@ pub(crate) trait Fetch<T> {
 }
 
 impl Fetch<u8> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<u8> {
         let byte = self.chunk.ops.get(self.ip).copied()?;
         self.ip += 1;
@@ -386,7 +384,6 @@ impl Fetch<u8> for OpStream<'_> {
 }
 
 impl Fetch<bool> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<bool> {
         let byte = self.chunk.ops.get(self.ip).copied()?;
         let b = match byte {
@@ -433,7 +430,6 @@ impl Fetch<usize> for OpStream<'_> {
 }
 
 impl Fetch<OpCode> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<OpCode> {
         self.fetch().and_then(OpCode::decode)
     }
@@ -457,7 +453,6 @@ where
 }
 
 impl Fetch<Op> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<Op> {
         let op = self.fetch()?;
         match op {
@@ -575,6 +570,9 @@ impl Display for Chunk {
         let stream = OpStream::new(self);
         writeln!(f, "text:")?;
         write!(f, "{stream}")?;
+        if self.vals.is_empty() {
+            return Ok(());
+        }
         writeln!(f, "data:")?;
         let max = self.vals.len().ilog10() as usize + 1;
         for (at, value) in self.vals.iter().enumerate() {
