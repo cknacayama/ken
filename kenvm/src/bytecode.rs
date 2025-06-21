@@ -4,99 +4,6 @@ use kenspan::Span;
 
 use crate::value::Value;
 
-#[derive(Clone, Copy)]
-#[repr(u8)]
-enum OpCode {
-    Nop,
-
-    Pop,
-    Push,
-
-    PushBool,
-    PushU32,
-
-    MakeList,
-    MakeTuple,
-    MakeTable,
-
-    Neg,
-    Not,
-
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Pow,
-
-    Eq,
-    Lt,
-    Le,
-
-    Call,
-    CallMethod,
-
-    AddLocal,
-    AddGlobal,
-
-    LoadIdx,
-    StoreIdx,
-
-    Load,
-    Store,
-
-    Restore,
-
-    LoadGlobal,
-    StoreGlobal,
-
-    Jmp,
-    JmpIfNot,
-
-    Ret,
-}
-
-impl OpCode {
-    const fn decode(byte: u8) -> Option<Self> {
-        match byte {
-            0 => Some(Self::Nop),
-            1 => Some(Self::Pop),
-            2 => Some(Self::Push),
-            3 => Some(Self::PushBool),
-            4 => Some(Self::PushU32),
-            5 => Some(Self::MakeList),
-            6 => Some(Self::MakeTuple),
-            7 => Some(Self::MakeTable),
-            8 => Some(Self::Neg),
-            9 => Some(Self::Not),
-            10 => Some(Self::Add),
-            11 => Some(Self::Sub),
-            12 => Some(Self::Mul),
-            13 => Some(Self::Div),
-            14 => Some(Self::Rem),
-            15 => Some(Self::Pow),
-            16 => Some(Self::Eq),
-            17 => Some(Self::Lt),
-            18 => Some(Self::Le),
-            19 => Some(Self::Call),
-            20 => Some(Self::CallMethod),
-            21 => Some(Self::AddLocal),
-            22 => Some(Self::AddGlobal),
-            23 => Some(Self::LoadIdx),
-            24 => Some(Self::StoreIdx),
-            25 => Some(Self::Load),
-            26 => Some(Self::Store),
-            27 => Some(Self::Restore),
-            28 => Some(Self::LoadGlobal),
-            29 => Some(Self::StoreGlobal),
-            30 => Some(Self::Jmp),
-            31 => Some(Self::JmpIfNot),
-            32 => Some(Self::Ret),
-            _ => None,
-        }
-    }
-}
-
 /// Representation of bytecode instructions.
 ///
 /// `Op` can be used for building a [Chunk].
@@ -132,7 +39,6 @@ pub enum Op {
     Call(u8),
     CallMethod(u8, usize),
 
-    AddLocal,
     AddGlobal,
 
     LoadIdx,
@@ -153,64 +59,110 @@ pub enum Op {
 }
 
 impl Op {
-    const fn encode_code(&self) -> OpCode {
+    const fn encode_code(&self) -> u8 {
         match self {
-            Self::Nop => OpCode::Nop,
-            Self::Pop => OpCode::Pop,
-            Self::Push(_) => OpCode::Push,
-            Self::PushBool(_) => OpCode::PushBool,
-            Self::PushU32(_) => OpCode::PushU32,
-            Self::MakeList(_) => OpCode::MakeList,
-            Self::MakeTuple(_) => OpCode::MakeTuple,
-            Self::MakeTable(_) => OpCode::MakeTable,
-            Self::Neg => OpCode::Neg,
-            Self::Not => OpCode::Not,
-            Self::Add => OpCode::Add,
-            Self::Sub => OpCode::Sub,
-            Self::Mul => OpCode::Mul,
-            Self::Div => OpCode::Div,
-            Self::Rem => OpCode::Rem,
-            Self::Pow => OpCode::Pow,
-            Self::Eq => OpCode::Eq,
-            Self::Lt => OpCode::Lt,
-            Self::Le => OpCode::Le,
-            Self::Call(_) => OpCode::Call,
-            Self::CallMethod(_, _) => OpCode::CallMethod,
-            Self::AddLocal => OpCode::AddLocal,
-            Self::AddGlobal => OpCode::AddGlobal,
-            Self::LoadIdx => OpCode::LoadIdx,
-            Self::StoreIdx => OpCode::StoreIdx,
-            Self::Load(_) => OpCode::Load,
-            Self::Store(_) => OpCode::Store,
-            Self::Restore(_) => OpCode::Restore,
-            Self::LoadGlobal(_) => OpCode::LoadGlobal,
-            Self::StoreGlobal(_) => OpCode::StoreGlobal,
-            Self::Jmp(_) => OpCode::Jmp,
-            Self::JmpIfNot(_) => OpCode::JmpIfNot,
-            Self::Ret => OpCode::Ret,
+            Self::Nop => 0,
+            Self::Pop => 1,
+            Self::Push(_) => 2,
+            Self::PushBool(_) => 3,
+            Self::PushU32(_) => 4,
+            Self::MakeList(_) => 5,
+            Self::MakeTuple(_) => 6,
+            Self::MakeTable(_) => 7,
+            Self::Neg => 8,
+            Self::Not => 9,
+            Self::Add => 10,
+            Self::Sub => 11,
+            Self::Mul => 12,
+            Self::Div => 13,
+            Self::Rem => 14,
+            Self::Pow => 15,
+            Self::Eq => 16,
+            Self::Lt => 17,
+            Self::Le => 18,
+            Self::Call(_) => 19,
+            Self::CallMethod(_, _) => 20,
+            Self::AddGlobal => 21,
+            Self::LoadIdx => 22,
+            Self::StoreIdx => 23,
+            Self::Load(_) => 24,
+            Self::Store(_) => 25,
+            Self::Restore(_) => 26,
+            Self::LoadGlobal(_) => 27,
+            Self::StoreGlobal(_) => 28,
+            Self::Jmp(_) => 29,
+            Self::JmpIfNot(_) => 30,
+            Self::Ret => 31,
         }
     }
 
-    fn encode_args(&self) -> ChunkBuffer<9> {
-        let mut chunk = ChunkBuffer::new();
-        match *self {
-            Self::PushBool(b) => {
-                chunk.push(u8::from(b));
-            }
-            Self::Call(arg) => {
-                chunk.push(arg);
-            }
-            Self::CallMethod(arg, name) => {
-                chunk.push(arg);
-                for b in name.to_ne_bytes() {
-                    chunk.push(b);
-                }
-            }
-            Self::PushU32(arg) => {
-                for b in arg.to_ne_bytes() {
-                    chunk.push(b);
-                }
-            }
+    const fn decode((hi, lo): (usize, usize)) -> Option<Self> {
+        let value = (hi as u128) << 64 | lo as u128;
+        let arg = (value >> 8) as usize;
+        match value as u8 {
+            0 => Some(Self::Nop),
+
+            1 => Some(Self::Pop),
+            2 => Some(Self::Push(arg)),
+
+            3 => Some(Self::PushBool((arg & 1) == 1)),
+            4 => Some(Self::PushU32(arg as u32)),
+
+            5 => Some(Self::MakeList(arg)),
+            6 => Some(Self::MakeTuple(arg)),
+            7 => Some(Self::MakeTable(arg)),
+
+            8 => Some(Self::Neg),
+            9 => Some(Self::Not),
+
+            10 => Some(Self::Add),
+            11 => Some(Self::Sub),
+            12 => Some(Self::Mul),
+            13 => Some(Self::Div),
+            14 => Some(Self::Rem),
+            15 => Some(Self::Pow),
+
+            16 => Some(Self::Eq),
+
+            17 => Some(Self::Lt),
+            18 => Some(Self::Le),
+
+            19 => Some(Self::Call(arg as u8)),
+            20 => Some(Self::CallMethod(arg as u8, (value >> 16) as usize)),
+
+            21 => Some(Self::AddGlobal),
+
+            22 => Some(Self::LoadIdx),
+            23 => Some(Self::StoreIdx),
+
+            24 => Some(Self::Load(arg)),
+            25 => Some(Self::Store(arg)),
+
+            26 => Some(Self::Restore(arg)),
+
+            27 => Some(Self::LoadGlobal(arg)),
+            28 => Some(Self::StoreGlobal(arg)),
+
+            29 => Some(Self::Jmp(arg)),
+            30 => Some(Self::JmpIfNot(arg)),
+
+            31 => Some(Self::Ret),
+            _ => None,
+        }
+    }
+
+    const fn encode(&self) -> (usize, usize) {
+        const {
+            assert!(size_of::<Self>() == size_of::<(usize, usize)>());
+            assert!(align_of::<Self>() == align_of::<(usize, usize)>());
+        };
+
+        let code = self.encode_code() as u128;
+        let encoded = match *self {
+            Self::PushBool(b) => code | (b as u128) << 8,
+            Self::Call(arg) => code | (arg as u128) << 8,
+            Self::CallMethod(arg, name) => code | (arg as u128) << 8 | (name as u128) << 16,
+            Self::PushU32(arg) => code | (arg as u128) << 8,
             Self::MakeList(arg)
             | Self::MakeTable(arg)
             | Self::MakeTuple(arg)
@@ -221,49 +173,15 @@ impl Op {
             | Self::LoadGlobal(arg)
             | Self::StoreGlobal(arg)
             | Self::Jmp(arg)
-            | Self::JmpIfNot(arg) => {
-                for b in arg.to_ne_bytes() {
-                    chunk.push(b);
-                }
-            }
-            _ => {}
-        }
-        chunk
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ChunkBuffer<const N: usize> {
-    buf: [u8; N],
-    len: usize,
-}
-
-impl<const N: usize> ChunkBuffer<N> {
-    const fn new() -> Self {
-        Self {
-            buf: [0; N],
-            len: 0,
-        }
-    }
-
-    const fn push(&mut self, byte: u8) -> bool {
-        if self.len >= N {
-            false
-        } else {
-            let i = self.len;
-            self.len += 1;
-            self.buf[i] = byte;
-            true
-        }
-    }
-
-    fn as_slice(&self) -> &[u8] {
-        &self.buf[..self.len]
+            | Self::JmpIfNot(arg) => code | (arg as u128) << 8,
+            _ => code,
+        };
+        ((encoded >> 64) as usize, encoded as usize)
     }
 }
 
 pub struct ChunkBuilder {
-    ops:   Vec<u8>,
+    ops:   Vec<(usize, usize)>,
     spans: Vec<Span>,
     vals:  Vec<Value>,
 }
@@ -294,29 +212,36 @@ impl ChunkBuilder {
     }
 
     #[must_use]
+    pub const fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[must_use]
     pub fn update_jmp(&mut self, at: usize, new: usize) -> Option<usize> {
-        let code = self.ops.get(at).copied().and_then(OpCode::decode)?;
-        let at = at + 1;
-        if matches!(code, OpCode::Jmp | OpCode::JmpIfNot) {
-            let slice = self.ops.get_mut(at..at + size_of::<usize>())?;
-            let old = usize::from_ne_bytes(slice.try_into().unwrap());
-            for (new, old) in new.to_ne_bytes().into_iter().zip(slice) {
-                *old = new;
+        let code = self.ops.get(at).copied().and_then(Op::decode)?;
+        match code {
+            Op::Jmp(ip) => {
+                self.ops[at] = Op::Jmp(new).encode();
+                Some(ip)
             }
-            Some(old)
-        } else {
-            None
+            Op::JmpIfNot(ip) => {
+                self.ops[at] = Op::JmpIfNot(new).encode();
+                Some(ip)
+            }
+            _ => None,
         }
     }
 
-    pub fn push_op(&mut self, op: Op, span: Span) -> std::ops::Range<usize> {
+    pub fn push_op(&mut self, op: Op, span: Span) -> usize {
         let cur = self.ops.len();
-        let code = op.encode_code();
-        let args = op.encode_args();
-        self.ops.push(code as u8);
-        self.ops.extend_from_slice(args.as_slice());
-        self.spans.extend(std::iter::repeat_n(span, args.len + 1));
-        cur..cur + args.len
+        self.ops.push(op.encode());
+        self.spans.push(span);
+        cur
     }
 
     pub fn push_value(&mut self, value: Value) -> usize {
@@ -329,7 +254,7 @@ impl ChunkBuilder {
         }
     }
 
-    pub fn push_push(&mut self, value: Value, span: Span) -> std::ops::Range<usize> {
+    pub fn push_push(&mut self, value: Value, span: Span) -> usize {
         let i = self.push_value(value);
         self.push_op(Op::Push(i), span)
     }
@@ -337,7 +262,7 @@ impl ChunkBuilder {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chunk {
-    ops:   Box<[u8]>,
+    ops:   Box<[(usize, usize)]>,
     spans: Box<[Span]>,
     vals:  Box<[Value]>,
 }
@@ -375,121 +300,25 @@ pub(crate) trait Fetch<T> {
     fn fetch(&mut self) -> Option<T>;
 }
 
-impl Fetch<u8> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<u8> {
-        let byte = self.chunk.ops.get(self.ip).copied()?;
-        self.ip += 1;
-        Some(byte)
-    }
-}
-
-impl Fetch<bool> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<bool> {
-        let byte = self.chunk.ops.get(self.ip).copied()?;
-        let b = match byte {
-            0 => false,
-            1 => true,
-            _ => return None,
-        };
-        self.ip += 1;
-        Some(b)
-    }
-}
-
-impl Fetch<u16> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<u16> {
-        let at = self.ip;
-        let slice = self.chunk.ops.get(at..at + size_of::<u16>())?;
-        let bytes = slice.try_into().unwrap();
-        let word = u16::from_ne_bytes(bytes);
-        self.ip += size_of::<u16>();
-        Some(word)
-    }
-}
-
-impl Fetch<u32> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<u32> {
-        let at = self.ip;
-        let slice = self.chunk.ops.get(at..at + size_of::<u32>())?;
-        let bytes = slice.try_into().unwrap();
-        let word = u32::from_ne_bytes(bytes);
-        self.ip += size_of::<u32>();
-        Some(word)
-    }
-}
-
-impl Fetch<usize> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<usize> {
-        let at = self.ip;
-        let slice = self.chunk.ops.get(at..at + size_of::<usize>())?;
-        let bytes = slice.try_into().unwrap();
-        let word = usize::from_ne_bytes(bytes);
-        self.ip += size_of::<usize>();
-        Some(word)
-    }
-}
-
-impl Fetch<OpCode> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<OpCode> {
-        self.fetch().and_then(OpCode::decode)
-    }
-}
-
 impl Fetch<Span> for OpStream<'_> {
     fn fetch(&mut self) -> Option<Span> {
         self.chunk.fetch_span(self.ip - 1)
     }
 }
 
-impl<T, U> Fetch<(T, U)> for OpStream<'_>
-where
-    Self: Fetch<T> + Fetch<U>,
-{
-    fn fetch(&mut self) -> Option<(T, U)> {
-        let t = self.fetch()?;
-        let u = self.fetch()?;
-        Some((t, u))
+impl Fetch<(usize, usize)> for OpStream<'_> {
+    fn fetch(&mut self) -> Option<(usize, usize)> {
+        let byte = self.chunk.ops.get(self.ip).copied()?;
+        self.ip += 1;
+        Some(byte)
     }
 }
 
 impl Fetch<Op> for OpStream<'_> {
+    #[inline]
     fn fetch(&mut self) -> Option<Op> {
         let op = self.fetch()?;
-        match op {
-            OpCode::Nop => Some(Op::Nop),
-            OpCode::Pop => Some(Op::Pop),
-            OpCode::Push => self.fetch().map(Op::Push),
-            OpCode::PushBool => self.fetch().map(Op::PushBool),
-            OpCode::PushU32 => self.fetch().map(Op::PushU32),
-            OpCode::MakeList => self.fetch().map(Op::MakeList),
-            OpCode::MakeTuple => self.fetch().map(Op::MakeTuple),
-            OpCode::MakeTable => self.fetch().map(Op::MakeTable),
-            OpCode::Neg => Some(Op::Neg),
-            OpCode::Not => Some(Op::Not),
-            OpCode::Add => Some(Op::Add),
-            OpCode::Sub => Some(Op::Sub),
-            OpCode::Mul => Some(Op::Mul),
-            OpCode::Div => Some(Op::Div),
-            OpCode::Rem => Some(Op::Rem),
-            OpCode::Pow => Some(Op::Pow),
-            OpCode::Eq => Some(Op::Eq),
-            OpCode::Lt => Some(Op::Lt),
-            OpCode::Le => Some(Op::Le),
-            OpCode::Call => self.fetch().map(Op::Call),
-            OpCode::CallMethod => self.fetch().map(|(t, u)| Op::CallMethod(t, u)),
-            OpCode::AddLocal => Some(Op::AddLocal),
-            OpCode::AddGlobal => Some(Op::AddGlobal),
-            OpCode::LoadIdx => Some(Op::LoadIdx),
-            OpCode::StoreIdx => Some(Op::StoreIdx),
-            OpCode::Load => self.fetch().map(Op::Load),
-            OpCode::Store => self.fetch().map(Op::Store),
-            OpCode::Restore => self.fetch().map(Op::Restore),
-            OpCode::LoadGlobal => self.fetch().map(Op::LoadGlobal),
-            OpCode::StoreGlobal => self.fetch().map(Op::StoreGlobal),
-            OpCode::Jmp => self.fetch().map(Op::Jmp),
-            OpCode::JmpIfNot => self.fetch().map(Op::JmpIfNot),
-            OpCode::Ret => Some(Op::Ret),
-        }
+        Op::decode(op)
     }
 }
 
@@ -533,7 +362,6 @@ impl Display for Op {
             Self::Le => write!(f, "le"),
             Self::Call(n) => write!(f, "call[count = {n}]"),
             Self::CallMethod(n, method) => write!(f, "call method[data[{method}], count = {n}]"),
-            Self::AddLocal => write!(f, "add local"),
             Self::AddGlobal => write!(f, "add global"),
             Self::LoadIdx => write!(f, "load idx"),
             Self::StoreIdx => write!(f, "store idx"),
@@ -579,18 +407,5 @@ impl Display for Chunk {
             writeln!(f, "    {at:>max$}:    {value}")?;
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn op_code() {
-        for byte in OpCode::Nop as u8..=OpCode::Ret as u8 {
-            let code = OpCode::decode(byte).unwrap();
-            assert_eq!(code as u8, byte);
-        }
     }
 }

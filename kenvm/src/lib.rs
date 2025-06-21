@@ -157,39 +157,42 @@ impl Vm {
     }
 
     const fn load_stack(&self, offset: usize) -> RuntimeResult<&Value> {
-        if offset > self.sp() {
+        if offset >= self.sp() {
             return Err(RuntimeError::StackUnderflow);
         }
-        Ok(&self.stack.as_slice()[self.sp() - offset])
+        Ok(&self.stack.as_slice()[self.sp() - offset - 1])
     }
 
+    #[inline]
     fn store_stack(&mut self, offset: usize, value: Value) -> RuntimeResult<()> {
         let sp = self.sp();
-        if offset > sp {
+        if offset >= sp {
             return Err(RuntimeError::StackUnderflow);
         }
-        self.stack.as_mut_slice()[sp - offset] = value;
+        self.stack[sp - offset - 1] = value;
         Ok(())
     }
 
     fn prefix_op(
         &mut self,
-        op: impl FnOnce(Value) -> RuntimeResult<Value>,
+        op: impl FnOnce(&Value) -> RuntimeResult<Value>,
     ) -> RuntimeResult<Status> {
-        let value = self.pop_stack()?;
+        let value = self.load_stack(0)?;
         let value = op(value)?;
-        self.push_stack(value);
+        let _ = self.store_stack(0, value);
         Ok(Status::Running)
     }
 
     fn infix_op(
         &mut self,
-        op: impl FnOnce(Value, Value) -> RuntimeResult<Value>,
+        op: impl FnOnce(&Value, &Value) -> RuntimeResult<Value>,
     ) -> RuntimeResult<Status> {
-        let rhs = self.pop_stack()?;
-        let lhs = self.pop_stack()?;
+        let [lhs, rhs] = self.local_view(2)? else {
+            unreachable!()
+        };
         let value = op(lhs, rhs)?;
-        self.push_stack(value);
+        let _ = self.pop_stack();
+        let _ = self.store_stack(0, value);
         Ok(Status::Running)
     }
 
@@ -282,11 +285,10 @@ impl Vm {
 
     fn call_method(&mut self, count: usize, name: &Value) -> FrameResult<Value> {
         let name = name.as_obj()?.as_string().ok_or(RuntimeError::TypeError)?;
-        let count = count + 1;
         let value = self.load_stack(count)?.clone();
         let ty = self.get_value_type(&value).unwrap().clone();
         let method = ty.get_method(name).ok_or(RuntimeError::MethodNotFound)?;
-        self.call(method, count)
+        self.call(method, count + 1)
     }
 
     fn eval_next(&mut self, frame: &mut Frame) -> FrameResult<Status> {
@@ -358,10 +360,12 @@ impl Vm {
             Op::Not => self.prefix_op(|x| !x).map_err(FrameError::from),
 
             Op::Eq => {
-                let rhs = self.pop_stack()?;
-                let lhs = self.pop_stack()?;
+                let [lhs, rhs] = self.local_view(2)? else {
+                    unreachable!()
+                };
                 let value = Value::Bool(lhs == rhs);
-                self.push_stack(value);
+                self.pop_stack()?;
+                let _ = self.store_stack(0, value);
                 Ok(Status::Running)
             }
 
@@ -370,22 +374,17 @@ impl Vm {
 
             Op::Call(count) => {
                 let count = count as usize;
-                let value = self.load_stack(count + 1)?.clone();
+                let value = self.load_stack(count)?.clone();
 
                 let obj = value.as_obj()?;
                 let ret = self.call(obj, count)?;
-                self.store_stack(1, ret)?;
+                let _ = self.store_stack(0, ret);
                 Ok(Status::Running)
             }
             Op::CallMethod(count, name) => {
                 let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
                 let ret = self.call_method(count as usize, &name)?;
                 self.push_stack(ret);
-                Ok(Status::Running)
-            }
-            Op::AddLocal => {
-                let value = self.pop_stack()?;
-                self.stack.push(value);
                 Ok(Status::Running)
             }
             Op::AddGlobal => {

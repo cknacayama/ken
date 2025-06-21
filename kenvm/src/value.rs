@@ -79,16 +79,33 @@ impl Display for Value {
 macro_rules! infix_impl {
     ($trayt:ident::$op:ident) => {
         impl $trayt for Value {
+            type Output = RuntimeResult<Self>;
+
+            fn $op(self, rhs: Self) -> Self::Output {
+                match (self, rhs) {
+                    (Self::Int(lhs), Self::Int(rhs)) => Ok(Self::Int($trayt::$op(lhs, rhs))),
+                    (Self::Int(lhs), Self::Float(rhs)) => {
+                        Ok(Self::Float($trayt::$op(lhs as f64, rhs)))
+                    }
+                    (Self::Float(lhs), Self::Int(rhs)) => {
+                        Ok(Self::Float($trayt::$op(lhs, rhs as f64)))
+                    }
+                    (Self::Float(lhs), Self::Float(rhs)) => Ok(Self::Float($trayt::$op(lhs, rhs))),
+                    _ => Err(RuntimeError::TypeError),
+                }
+            }
+        }
+        impl $trayt for &Value {
             type Output = RuntimeResult<Value>;
 
             fn $op(self, rhs: Self) -> Self::Output {
                 match (self, rhs) {
                     (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Int($trayt::$op(lhs, rhs))),
                     (Value::Int(lhs), Value::Float(rhs)) => {
-                        Ok(Value::Float($trayt::$op(lhs as f64, rhs)))
+                        Ok(Value::Float($trayt::$op(*lhs as f64, rhs)))
                     }
                     (Value::Float(lhs), Value::Int(rhs)) => {
-                        Ok(Value::Float($trayt::$op(lhs, rhs as f64)))
+                        Ok(Value::Float($trayt::$op(lhs, *rhs as f64)))
                     }
                     (Value::Float(lhs), Value::Float(rhs)) => {
                         Ok(Value::Float($trayt::$op(lhs, rhs)))
@@ -194,51 +211,85 @@ impl Rem for Value {
     }
 }
 
-impl Neg for Value {
-    type Output = RuntimeResult<Self>;
+impl Div for &Value {
+    type Output = RuntimeResult<Value>;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Value::Int(lhs), Value::Int(rhs)) => lhs
+                .checked_div(*rhs)
+                .ok_or(RuntimeError::DivisionByZero)
+                .map(Value::Int),
+            (Value::Int(lhs), Value::Float(rhs)) => Ok(Value::Float(*lhs as f64 / rhs)),
+            (Value::Float(lhs), Value::Int(rhs)) => Ok(Value::Float(lhs / *rhs as f64)),
+            (Value::Float(lhs), Value::Float(rhs)) => Ok(Value::Float(lhs / rhs)),
+            _ => Err(RuntimeError::TypeError),
+        }
+    }
+}
+
+impl Rem for &Value {
+    type Output = RuntimeResult<Value>;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Value::Int(lhs), Value::Int(rhs)) => lhs
+                .checked_rem(*rhs)
+                .ok_or(RuntimeError::DivisionByZero)
+                .map(Value::Int),
+            (Value::Int(lhs), Value::Float(rhs)) => Ok(Value::Float(*lhs as f64 % rhs)),
+            (Value::Float(lhs), Value::Int(rhs)) => Ok(Value::Float(lhs % *rhs as f64)),
+            (Value::Float(lhs), Value::Float(rhs)) => Ok(Value::Float(lhs % rhs)),
+            _ => Err(RuntimeError::TypeError),
+        }
+    }
+}
+
+impl Neg for &Value {
+    type Output = RuntimeResult<Value>;
 
     fn neg(self) -> Self::Output {
         match self {
-            Self::Int(int) => Ok(Self::Int(-int)),
-            Self::Float(float) => Ok(Self::Float(-float)),
+            Value::Int(int) => Ok(Value::Int(-int)),
+            Value::Float(float) => Ok(Value::Float(-float)),
             _ => Err(RuntimeError::TypeError),
         }
     }
 }
 
-impl Not for Value {
-    type Output = RuntimeResult<Self>;
+impl Not for &Value {
+    type Output = RuntimeResult<Value>;
 
     fn not(self) -> Self::Output {
         match self {
-            Self::Bool(b) => Ok(Self::Bool(!b)),
+            Value::Bool(b) => Ok(Value::Bool(!b)),
             _ => Err(RuntimeError::TypeError),
         }
     }
 }
 
-pub(crate) fn try_pow(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
+pub(crate) fn try_pow(lhs: &Value, rhs: &Value) -> RuntimeResult<Value> {
     match (lhs, rhs) {
-        (Value::Float(lhs), Value::Float(rhs)) => Ok(Value::Float(lhs.powf(rhs))),
+        (Value::Float(lhs), Value::Float(rhs)) => Ok(Value::Float(lhs.powf(*rhs))),
         (Value::Float(lhs), Value::Int(rhs)) => {
-            let rhs = rhs
+            let rhs = (*rhs)
                 .try_into()
                 .map_err(|_| RuntimeError::OutOfBoundsInteger)?;
             Ok(Value::Float(lhs.powi(rhs)))
         }
         (Value::Int(lhs), Value::Float(rhs)) => {
-            let lhs = lhs as f64;
-            Ok(Value::Float(lhs.powf(rhs)))
+            let lhs = *lhs as f64;
+            Ok(Value::Float(lhs.powf(*rhs)))
         }
         (Value::Int(lhs), Value::Int(rhs @ 0..)) => {
-            let rhs = rhs
+            let rhs = (*rhs)
                 .try_into()
                 .map_err(|_| RuntimeError::OutOfBoundsInteger)?;
             Ok(Value::Int(lhs.pow(rhs)))
         }
         (Value::Int(lhs), Value::Int(rhs)) => {
-            let lhs = lhs as f64;
-            let rhs = rhs
+            let lhs = *lhs as f64;
+            let rhs = (*rhs)
                 .try_into()
                 .map_err(|_| RuntimeError::OutOfBoundsInteger)?;
             Ok(Value::Float(lhs.powi(rhs)))
@@ -247,22 +298,22 @@ pub(crate) fn try_pow(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
     }
 }
 
-pub(crate) fn try_lt(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
+pub(crate) fn try_lt(lhs: &Value, rhs: &Value) -> RuntimeResult<Value> {
     let result = match (lhs, rhs) {
         (Value::Int(lhs), Value::Int(rhs)) => lhs < rhs,
-        (Value::Int(lhs), Value::Float(rhs)) => (lhs as f64) < rhs,
-        (Value::Float(lhs), Value::Int(rhs)) => lhs < rhs as f64,
+        (Value::Int(lhs), Value::Float(rhs)) => &(*lhs as f64) < rhs,
+        (Value::Float(lhs), Value::Int(rhs)) => lhs < &(*rhs as f64),
         (Value::Float(lhs), Value::Float(rhs)) => lhs < rhs,
         _ => return Err(RuntimeError::TypeError),
     };
     Ok(Value::Bool(result))
 }
 
-pub(crate) fn try_le(lhs: Value, rhs: Value) -> RuntimeResult<Value> {
+pub(crate) fn try_le(lhs: &Value, rhs: &Value) -> RuntimeResult<Value> {
     let result = match (lhs, rhs) {
         (Value::Int(lhs), Value::Int(rhs)) => lhs <= rhs,
-        (Value::Int(lhs), Value::Float(rhs)) => (lhs as f64) <= rhs,
-        (Value::Float(lhs), Value::Int(rhs)) => lhs <= rhs as f64,
+        (Value::Int(lhs), Value::Float(rhs)) => &(*lhs as f64) <= rhs,
+        (Value::Float(lhs), Value::Int(rhs)) => lhs <= &(*rhs as f64),
         (Value::Float(lhs), Value::Float(rhs)) => lhs <= rhs,
         _ => return Err(RuntimeError::TypeError),
     };
