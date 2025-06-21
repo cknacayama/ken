@@ -102,15 +102,12 @@ impl Vm {
         self.stack.len()
     }
 
+    #[inline]
     fn restore(&mut self, bp: usize) {
         self.stack.truncate(bp);
     }
 
     pub fn eval(&mut self, function: &Function) -> FrameResult<Value> {
-        self.eval_function(function)
-    }
-
-    fn eval_function(&mut self, function: &Function) -> FrameResult<Value> {
         let sp = self.sp();
 
         let mut frame = self.create_frame(function);
@@ -139,7 +136,6 @@ impl Vm {
         self.stack.pop().ok_or(RuntimeError::StackUnderflow)
     }
 
-    #[inline]
     fn push_stack(&mut self, value: Value) {
         self.stack.push(value);
     }
@@ -158,6 +154,22 @@ impl Vm {
             return Err(RuntimeError::StackUnderflow);
         }
         Ok(self.stack.drain(self.stack.len() - len..))
+    }
+
+    const fn load_stack(&self, offset: usize) -> RuntimeResult<&Value> {
+        if offset > self.sp() {
+            return Err(RuntimeError::StackUnderflow);
+        }
+        Ok(&self.stack.as_slice()[self.sp() - offset])
+    }
+
+    fn store_stack(&mut self, offset: usize, value: Value) -> RuntimeResult<()> {
+        let sp = self.sp();
+        if offset > sp {
+            return Err(RuntimeError::StackUnderflow);
+        }
+        self.stack.as_mut_slice()[sp - offset] = value;
+        Ok(())
     }
 
     fn prefix_op(
@@ -250,14 +262,13 @@ impl Vm {
         }
     }
 
-    #[inline]
     fn call(&mut self, obj: &Obj, count: usize) -> FrameResult<Value> {
         match obj {
             Obj::Function(function) => {
                 if function.arity() != count {
                     return Err(FrameError::from(RuntimeError::ArityError));
                 }
-                self.eval_function(function)
+                self.eval(function)
             }
             Obj::Builtin(builtin) => {
                 let args = self.local_view(count)?;
@@ -272,7 +283,7 @@ impl Vm {
     fn call_method(&mut self, count: usize, name: &Value) -> FrameResult<Value> {
         let name = name.as_obj()?.as_string().ok_or(RuntimeError::TypeError)?;
         let count = count + 1;
-        let value = self.stack.get(self.sp() - count).unwrap().clone();
+        let value = self.load_stack(count)?.clone();
         let ty = self.get_value_type(&value).unwrap().clone();
         let method = ty.get_method(name).ok_or(RuntimeError::MethodNotFound)?;
         self.call(method, count)
@@ -359,15 +370,11 @@ impl Vm {
 
             Op::Call(count) => {
                 let count = count as usize;
-                if count + 1 > self.sp() {
-                    return Err(FrameError::from(RuntimeError::StackUnderflow));
-                }
-                let value = self.stack[self.sp() - count - 1].clone();
+                let value = self.load_stack(count + 1)?.clone();
 
                 let obj = value.as_obj()?;
                 let ret = self.call(obj, count)?;
-                self.pop_stack()?;
-                self.push_stack(ret);
+                self.store_stack(1, ret)?;
                 Ok(Status::Running)
             }
             Op::CallMethod(count, name) => {

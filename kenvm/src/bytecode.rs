@@ -233,7 +233,7 @@ impl Op {
 }
 
 #[derive(Clone, Copy)]
-struct ChunkBuffer<const N: usize = 8> {
+struct ChunkBuffer<const N: usize> {
     buf: [u8; N],
     len: usize,
 }
