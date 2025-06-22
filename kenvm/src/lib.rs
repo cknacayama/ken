@@ -1,3 +1,4 @@
+pub mod arith;
 pub mod builtin;
 pub mod bytecode;
 pub mod hash;
@@ -14,7 +15,7 @@ use crate::bytecode::{Chunk, Fetch, Op, OpStream};
 use crate::hash::{HashValue, Table};
 use crate::obj::{Function, MutObj, Obj};
 use crate::ty::{Ty, TyId, Typed};
-use crate::value::{Value, try_le, try_lt, try_pow};
+use crate::value::Value;
 
 #[derive(Debug, Clone)]
 enum Status {
@@ -373,7 +374,7 @@ impl Vm {
             Op::Mul => self.infix_op(|a, b| a * b).map_err(Box::from),
             Op::Div => self.infix_op(|a, b| a / b).map_err(Box::from),
             Op::Rem => self.infix_op(|a, b| a % b).map_err(Box::from),
-            Op::Pow => self.infix_op(try_pow).map_err(Box::from),
+            Op::Pow => self.infix_op(Value::pow).map_err(Box::from),
 
             Op::Neg => self.prefix_op(|x| -x).map_err(Box::from),
             Op::Not => self.prefix_op(|x| !x).map_err(Box::from),
@@ -388,8 +389,8 @@ impl Vm {
                 Ok(Status::Running)
             }
 
-            Op::Lt => self.infix_op(try_lt).map_err(Box::from),
-            Op::Le => self.infix_op(try_le).map_err(Box::from),
+            Op::Lt => self.infix_op(Value::lt).map_err(Box::from),
+            Op::Le => self.infix_op(Value::le).map_err(Box::from),
 
             Op::Call(count) => {
                 let count = count as usize;
