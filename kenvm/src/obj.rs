@@ -19,41 +19,16 @@ pub enum Obj {
     Type(Rc<Ty>),
 }
 
-impl From<Rc<str>> for Obj {
-    fn from(v: Rc<str>) -> Self {
-        Self::String(v)
-    }
-}
-
-impl From<Builtin> for Obj {
-    fn from(v: Builtin) -> Self {
-        Self::Builtin(v)
-    }
-}
-
-impl From<Function> for Obj {
-    fn from(v: Function) -> Self {
-        Self::Function(v)
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum MutObj {
     List(Vec<Value>),
     Tuple(Box<[Value]>),
     Table(Table<Value>),
-    Closure(Closure),
 }
 
 impl From<Box<[Value]>> for MutObj {
     fn from(v: Box<[Value]>) -> Self {
         Self::Tuple(v)
-    }
-}
-
-impl From<Closure> for MutObj {
-    fn from(v: Closure) -> Self {
-        Self::Closure(v)
     }
 }
 
@@ -280,11 +255,6 @@ impl Display for MutObj {
                     write!(f, "{key}: {value}")?;
                 }
                 write!(f, "}}")
-            }
-            Self::Closure(closure) => {
-                write!(f, "fn{{ arity: {}, closed: ", closure.function.arity())?;
-                print_list(&closure.captures, f)?;
-                write!(f, " }}")
             }
         }
     }

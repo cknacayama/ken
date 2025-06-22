@@ -19,7 +19,7 @@ use crate::value::{Value, try_le, try_lt, try_pow};
 #[derive(Debug, Clone)]
 enum Status {
     Running,
-    Finished(Value),
+    Finished,
 }
 
 #[derive(Debug, Clone)]
@@ -108,13 +108,19 @@ impl Vm {
     }
 
     pub fn eval(&mut self, function: &Function) -> FrameResult<Value> {
+        self.eval_function(function)?;
+        let value = self.pop_stack()?;
+        Ok(value)
+    }
+
+    fn eval_function(&mut self, function: &Function) -> FrameResult<()> {
         let sp = self.sp();
 
         let mut frame = self.create_frame(function);
         loop {
             match self.eval_next(&mut frame) {
                 Ok(Status::Running) => {}
-                Ok(Status::Finished(ret)) => break Ok(ret),
+                Ok(Status::Finished) => break Ok(()),
                 Err(mut err) => {
                     let span = frame.fetch().unwrap_or_default();
                     self.restore(sp);
@@ -128,6 +134,22 @@ impl Vm {
     const fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
         let bp = self.sp() - function.arity();
         Frame::new(function.chunk(), bp)
+    }
+
+    fn swap_remove(&mut self, at: usize) -> RuntimeResult<Value> {
+        if at >= self.sp() {
+            return Err(RuntimeError::StackUnderflow);
+        }
+        Ok(self.stack.swap_remove(at))
+    }
+
+    const fn swap_stack(&mut self, i: usize, j: usize) -> RuntimeResult<()> {
+        let sp = self.sp();
+        if i >= sp || j >= sp {
+            return Err(RuntimeError::StackUnderflow);
+        }
+        self.stack.as_mut_slice().swap(i, j);
+        Ok(())
     }
 
     fn pop_stack(&mut self) -> RuntimeResult<Value> {
@@ -176,8 +198,7 @@ impl Vm {
         &mut self,
         op: impl FnOnce(&Value) -> RuntimeResult<Value>,
     ) -> RuntimeResult<Status> {
-        let value = self.load_stack(0)?;
-        let value = op(value)?;
+        let value = self.load_stack(0).and_then(op)?;
         let _ = self.store_stack(0, value);
         Ok(Status::Running)
     }
@@ -211,7 +232,6 @@ impl Vm {
                     MutObj::Table(table) => table
                         .get(&HashValue::Int(idx))
                         .ok_or(RuntimeError::NoValue)?,
-                    _ => return Err(RuntimeError::TypeError),
                 };
                 self.push_stack(item.clone());
 
@@ -248,7 +268,6 @@ impl Vm {
                     MutObj::Table(table) => table
                         .get_mut(&HashValue::Int(idx))
                         .ok_or(RuntimeError::NoValue)?,
-                    _ => return Err(RuntimeError::TypeError),
                 };
                 *item = value;
 
@@ -264,25 +283,26 @@ impl Vm {
         }
     }
 
-    fn call(&mut self, obj: &Obj, count: usize) -> FrameResult<Value> {
+    fn call(&mut self, obj: &Obj, count: usize) -> FrameResult<()> {
         match obj {
             Obj::Function(function) => {
                 if function.arity() != count {
                     return Err(Box::from(RuntimeError::ArityError));
                 }
-                self.eval(function)
+                self.eval_function(function)
             }
             Obj::Builtin(builtin) => {
                 let args = self.local_view(count)?;
                 let ret = builtin(self, args)?;
                 self.restore(self.sp() - count);
-                Ok(ret)
+                self.push_stack(ret);
+                Ok(())
             }
             _ => Err(Box::from(RuntimeError::TypeError)),
         }
     }
 
-    fn call_method(&mut self, count: usize, name: &Value) -> FrameResult<Value> {
+    fn call_method(&mut self, name: &Value, count: usize) -> FrameResult<()> {
         let name = name.as_obj()?.as_string().ok_or(RuntimeError::TypeError)?;
         let value = self.load_stack(count)?;
         let ty = self.get_value_type(value).unwrap().clone();
@@ -376,15 +396,13 @@ impl Vm {
                 let value = self.load_stack(count)?;
 
                 let obj = value.as_obj()?.clone();
-                let ret = self.call(&obj, count)?;
-                let _ = self.store_stack(0, ret);
+                self.call(&obj, count)?;
+                let _ = self.swap_remove(self.sp() - 2);
                 Ok(Status::Running)
             }
-
             Op::CallMethod(count, name) => {
                 let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
-                let ret = self.call_method(count as usize, &name)?;
-                self.push_stack(ret);
+                self.call_method(&name, count as usize)?;
                 Ok(Status::Running)
             }
             Op::AddGlobal => {
@@ -399,6 +417,7 @@ impl Vm {
                 if abs >= self.sp() {
                     return Err(Box::from(RuntimeError::LocalNotFound));
                 }
+
                 let value = self.stack.as_slice()[abs].clone();
                 self.push_stack(value);
                 Ok(Status::Running)
@@ -441,17 +460,18 @@ impl Vm {
                 frame.jump(ip);
                 Ok(Status::Running)
             }
-            Op::JmpIfNot(ip) => {
-                let cond: bool = self.pop_stack()?.try_into()?;
-                if !cond {
+            Op::JmpIfNot(ip) => match self.pop_stack()? {
+                Value::Bool(false) => {
                     frame.jump(ip);
+                    Ok(Status::Running)
                 }
-                Ok(Status::Running)
-            }
+                Value::Bool(true) => Ok(Status::Running),
+                _ => Err(Box::from(RuntimeError::TypeError)),
+            },
             Op::Ret => {
-                let ret = self.pop_stack()?;
-                self.restore(frame.bp());
-                Ok(Status::Finished(ret))
+                self.swap_stack(self.sp() - 1, frame.bp())?;
+                self.restore(frame.bp() + 1);
+                Ok(Status::Finished)
             }
         }
     }

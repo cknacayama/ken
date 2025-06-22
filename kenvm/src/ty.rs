@@ -21,8 +21,7 @@ impl TyId {
     pub const LIST: Self = Self(8);
     pub const TUPLE: Self = Self(9);
     pub const TABLE: Self = Self(10);
-    pub const CLOSURE: Self = Self(11);
-    pub const OBJ: Self = Self(12);
+    pub const OBJ: Self = Self(11);
 
     pub(crate) fn default_data(self) -> Ty {
         match self {
@@ -54,7 +53,6 @@ impl TyId {
                 ty.add_builtin(Builtin::len());
                 ty
             }
-            Self::CLOSURE => Ty::new(self, Rc::from("closure")),
             Self::OBJ => Ty::new(self, Rc::from("obj")),
             _ => todo!(),
         }
@@ -105,7 +103,6 @@ impl Typed for MutObj {
             Self::List(_) => TyId::LIST,
             Self::Tuple(_) => TyId::TUPLE,
             Self::Table(_) => TyId::TABLE,
-            Self::Closure(_) => TyId::CLOSURE,
         }
     }
 }

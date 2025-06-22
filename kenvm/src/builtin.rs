@@ -55,7 +55,6 @@ fn len(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
                 MutObj::List(values) => try_cast_int(values.len()),
                 MutObj::Tuple(values) => try_cast_int(values.len()),
                 MutObj::Table(values) => try_cast_int(values.len()),
-                _ => Err(RuntimeError::TypeError),
             }
         }
         Value::Obj(obj) => match obj.as_ref() {
