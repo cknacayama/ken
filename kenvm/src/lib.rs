@@ -381,6 +381,7 @@ impl Vm {
                 let _ = self.store_stack(0, ret);
                 Ok(Status::Running)
             }
+
             Op::CallMethod(count, name) => {
                 let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
                 let ret = self.call_method(count as usize, &name)?;
@@ -395,11 +396,12 @@ impl Vm {
             Op::LoadIdx => self.load_idx().map_err(FrameError::from),
             Op::StoreIdx => self.store_idx().map_err(FrameError::from),
             Op::Load(at) => {
-                let value = self
-                    .stack
-                    .get(frame.bp() + at)
-                    .ok_or(RuntimeError::LocalNotFound)?;
-                self.push_stack(value.clone());
+                let abs = frame.bp() + at;
+                if abs >= self.sp() {
+                    return Err(FrameError::from(RuntimeError::LocalNotFound));
+                }
+                let value = self.stack[abs].clone();
+                self.push_stack(value);
                 Ok(Status::Running)
             }
             Op::Store(at) => {

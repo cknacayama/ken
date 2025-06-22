@@ -96,7 +96,13 @@ impl Op {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     const fn decode((hi, lo): (usize, usize)) -> Option<Self> {
+        const {
+            assert!(size_of::<Self>() == size_of::<(usize, usize)>());
+            assert!(align_of::<Self>() == align_of::<(usize, usize)>());
+        };
+
         let value = (hi as u128) << 64 | lo as u128;
         let arg = (value >> 8) as usize;
         match value as u8 {
@@ -151,6 +157,7 @@ impl Op {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     const fn encode(&self) -> (usize, usize) {
         const {
             assert!(size_of::<Self>() == size_of::<(usize, usize)>());
@@ -315,10 +322,8 @@ impl Fetch<(usize, usize)> for OpStream<'_> {
 }
 
 impl Fetch<Op> for OpStream<'_> {
-    #[inline]
     fn fetch(&mut self) -> Option<Op> {
-        let op = self.fetch()?;
-        Op::decode(op)
+        self.fetch().and_then(Op::decode)
     }
 }
 
