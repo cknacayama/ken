@@ -11,7 +11,7 @@ use std::rc::Rc;
 use kenspan::Span;
 
 use crate::builtin::Builtin;
-use crate::bytecode::{Chunk, Fetch, Op, OpStream};
+use crate::bytecode::{Chunk, Op, OpStream};
 use crate::hash::{HashValue, Table};
 use crate::obj::{Function, MutObj, Obj};
 use crate::ty::{Ty, TyId, Typed};
@@ -36,13 +36,6 @@ impl<'a> Frame<'a> {
             stream: OpStream::new(chunk),
             bp,
         }
-    }
-
-    fn fetch<T>(&mut self) -> RuntimeResult<T>
-    where
-        OpStream<'a>: Fetch<T>,
-    {
-        self.stream.fetch().ok_or(RuntimeError::FetchError)
     }
 
     #[must_use]
@@ -123,7 +116,7 @@ impl Vm {
                 Ok(Status::Running) => {}
                 Ok(Status::Finished) => break Ok(()),
                 Err(mut err) => {
-                    let span = frame.fetch().unwrap_or_default();
+                    let span = frame.stream.fetch_span().unwrap_or_default();
                     self.restore(sp);
                     err.spans.push(span);
                     break Err(err);
@@ -177,22 +170,23 @@ impl Vm {
         Ok(self.stack.drain(self.stack.len() - len..))
     }
 
+    #[inline(never)]
     const fn load_stack(&self, offset: usize) -> RuntimeResult<&Value> {
-        if offset >= self.sp() {
+        let sp = self.sp();
+        if offset >= sp {
             return Err(RuntimeError::StackUnderflow);
         }
-        Ok(&self.stack.as_slice()[self.sp() - offset - 1])
+        Ok(&self.stack.as_slice()[sp - offset - 1])
     }
 
     #[inline]
     fn store_stack(&mut self, offset: usize, value: Value) -> RuntimeResult<()> {
         let sp = self.sp();
         if offset >= sp {
-            Err(RuntimeError::StackUnderflow)
-        } else {
-            self.stack[sp - offset - 1] = value;
-            Ok(())
+            return Err(RuntimeError::StackUnderflow);
         }
+        self.stack[sp - offset - 1] = value;
+        Ok(())
     }
 
     fn prefix_op(
@@ -312,7 +306,7 @@ impl Vm {
     }
 
     fn eval_next(&mut self, frame: &mut Frame) -> FrameResult<Status> {
-        let op = frame.fetch()?;
+        let op = frame.stream.fetch().ok_or(RuntimeError::FetchError)?;
 
         match op {
             Op::Nop => Ok(Status::Running),

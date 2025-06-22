@@ -5,9 +5,7 @@ use kenspan::Span;
 use crate::value::Value;
 
 /// Representation of bytecode instructions.
-///
-/// `Op` can be used for building a [Chunk].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
     Nop,
 
@@ -58,137 +56,8 @@ pub enum Op {
     Ret,
 }
 
-impl Op {
-    const fn encode_code(&self) -> u8 {
-        match self {
-            Self::Nop => 0,
-            Self::Pop => 1,
-            Self::Push(_) => 2,
-            Self::PushBool(_) => 3,
-            Self::PushU32(_) => 4,
-            Self::MakeList(_) => 5,
-            Self::MakeTuple(_) => 6,
-            Self::MakeTable(_) => 7,
-            Self::Neg => 8,
-            Self::Not => 9,
-            Self::Add => 10,
-            Self::Sub => 11,
-            Self::Mul => 12,
-            Self::Div => 13,
-            Self::Rem => 14,
-            Self::Pow => 15,
-            Self::Eq => 16,
-            Self::Lt => 17,
-            Self::Le => 18,
-            Self::Call(_) => 19,
-            Self::CallMethod(_, _) => 20,
-            Self::AddGlobal => 21,
-            Self::LoadIdx => 22,
-            Self::StoreIdx => 23,
-            Self::Load(_) => 24,
-            Self::Store(_) => 25,
-            Self::Restore(_) => 26,
-            Self::LoadGlobal(_) => 27,
-            Self::StoreGlobal(_) => 28,
-            Self::Jmp(_) => 29,
-            Self::JmpIfNot(_) => 30,
-            Self::Ret => 31,
-        }
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    const fn decode((hi, lo): (usize, usize)) -> Option<Self> {
-        const {
-            assert!(size_of::<Self>() == size_of::<(usize, usize)>());
-            assert!(align_of::<Self>() == align_of::<(usize, usize)>());
-        };
-
-        let value = (hi as u128) << 64 | lo as u128;
-        let arg = (value >> 8) as usize;
-        match value as u8 {
-            0 => Some(Self::Nop),
-
-            1 => Some(Self::Pop),
-            2 => Some(Self::Push(arg)),
-
-            3 => Some(Self::PushBool((arg & 1) == 1)),
-            4 => Some(Self::PushU32(arg as u32)),
-
-            5 => Some(Self::MakeList(arg)),
-            6 => Some(Self::MakeTuple(arg)),
-            7 => Some(Self::MakeTable(arg)),
-
-            8 => Some(Self::Neg),
-            9 => Some(Self::Not),
-
-            10 => Some(Self::Add),
-            11 => Some(Self::Sub),
-            12 => Some(Self::Mul),
-            13 => Some(Self::Div),
-            14 => Some(Self::Rem),
-            15 => Some(Self::Pow),
-
-            16 => Some(Self::Eq),
-
-            17 => Some(Self::Lt),
-            18 => Some(Self::Le),
-
-            19 => Some(Self::Call(arg as u8)),
-            20 => Some(Self::CallMethod(arg as u8, (value >> 16) as usize)),
-
-            21 => Some(Self::AddGlobal),
-
-            22 => Some(Self::LoadIdx),
-            23 => Some(Self::StoreIdx),
-
-            24 => Some(Self::Load(arg)),
-            25 => Some(Self::Store(arg)),
-
-            26 => Some(Self::Restore(arg)),
-
-            27 => Some(Self::LoadGlobal(arg)),
-            28 => Some(Self::StoreGlobal(arg)),
-
-            29 => Some(Self::Jmp(arg)),
-            30 => Some(Self::JmpIfNot(arg)),
-
-            31 => Some(Self::Ret),
-            _ => None,
-        }
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    const fn encode(&self) -> (usize, usize) {
-        const {
-            assert!(size_of::<Self>() == size_of::<(usize, usize)>());
-            assert!(align_of::<Self>() == align_of::<(usize, usize)>());
-        };
-
-        let code = self.encode_code() as u128;
-        let encoded = match *self {
-            Self::PushBool(b) => code | (b as u128) << 8,
-            Self::Call(arg) => code | (arg as u128) << 8,
-            Self::CallMethod(arg, name) => code | (arg as u128) << 8 | (name as u128) << 16,
-            Self::PushU32(arg) => code | (arg as u128) << 8,
-            Self::MakeList(arg)
-            | Self::MakeTable(arg)
-            | Self::MakeTuple(arg)
-            | Self::Push(arg)
-            | Self::Load(arg)
-            | Self::Store(arg)
-            | Self::Restore(arg)
-            | Self::LoadGlobal(arg)
-            | Self::StoreGlobal(arg)
-            | Self::Jmp(arg)
-            | Self::JmpIfNot(arg) => code | (arg as u128) << 8,
-            _ => code,
-        };
-        ((encoded >> 64) as usize, encoded as usize)
-    }
-}
-
 pub struct ChunkBuilder {
-    ops:   Vec<(usize, usize)>,
+    ops:   Vec<Op>,
     spans: Vec<Span>,
     vals:  Vec<Value>,
 }
@@ -229,16 +98,12 @@ impl ChunkBuilder {
     }
 
     #[must_use]
-    pub fn update_jmp(&mut self, at: usize, new: usize) -> Option<usize> {
-        let code = self.ops.get(at).copied().and_then(Op::decode)?;
+    pub fn update_jmp(&mut self, at: usize, mut new: usize) -> Option<usize> {
+        let code = self.ops.get_mut(at)?;
         match code {
-            Op::Jmp(ip) => {
-                self.ops[at] = Op::Jmp(new).encode();
-                Some(ip)
-            }
-            Op::JmpIfNot(ip) => {
-                self.ops[at] = Op::JmpIfNot(new).encode();
-                Some(ip)
+            Op::Jmp(ip) | Op::JmpIfNot(ip) => {
+                std::mem::swap(ip, &mut new);
+                Some(new)
             }
             _ => None,
         }
@@ -246,7 +111,7 @@ impl ChunkBuilder {
 
     pub fn push_op(&mut self, op: Op, span: Span) -> usize {
         let cur = self.ops.len();
-        self.ops.push(op.encode());
+        self.ops.push(op);
         self.spans.push(span);
         cur
     }
@@ -269,7 +134,7 @@ impl ChunkBuilder {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chunk {
-    ops:   Box<[(usize, usize)]>,
+    ops:   Box<[Op]>,
     spans: Box<[Span]>,
     vals:  Box<[Value]>,
 }
@@ -302,28 +167,20 @@ pub struct OpStream<'a> {
     ip:    usize,
 }
 
-pub(crate) trait Fetch<T> {
-    #[must_use]
-    fn fetch(&mut self) -> Option<T>;
-}
+impl OpStream<'_> {
+    pub const fn fetch(&mut self) -> Option<Op> {
+        let slice = &*self.chunk.ops;
+        if self.ip < slice.len() {
+            let op = slice[self.ip];
+            self.ip += 1;
+            Some(op)
+        } else {
+            None
+        }
+    }
 
-impl Fetch<Span> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<Span> {
+    pub fn fetch_span(&mut self) -> Option<Span> {
         self.chunk.fetch_span(self.ip - 1)
-    }
-}
-
-impl Fetch<(usize, usize)> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<(usize, usize)> {
-        let byte = self.chunk.ops.get(self.ip).copied()?;
-        self.ip += 1;
-        Some(byte)
-    }
-}
-
-impl Fetch<Op> for OpStream<'_> {
-    fn fetch(&mut self) -> Option<Op> {
-        self.fetch().and_then(Op::decode)
     }
 }
 
@@ -390,7 +247,7 @@ impl Display for OpStream<'_> {
         let max = self.chunk.len().ilog10() as usize + 1;
         let mut stream = *self;
         let mut ip = stream.ip;
-        while let Some(op) = <Self as Fetch<Op>>::fetch(&mut stream) {
+        while let Some(op) = stream.fetch() {
             writeln!(f, "    {ip:>max$}:    {op}")?;
             ip = stream.ip;
         }
