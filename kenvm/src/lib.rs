@@ -111,20 +111,18 @@ impl Vm {
         let sp = self.sp();
 
         let mut frame = self.create_frame(function);
-        let ret = loop {
+        loop {
             match self.eval_next(&mut frame) {
                 Ok(Status::Running) => {}
-                Ok(Status::Finished(ret)) => break ret,
+                Ok(Status::Finished(ret)) => break Ok(ret),
                 Err(mut err) => {
                     let span = frame.fetch().unwrap_or_default();
                     self.restore(sp);
                     err.spans.push(span);
-                    return Err(err);
+                    break Err(err);
                 }
             }
-        };
-
-        Ok(ret)
+        }
     }
 
     const fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
@@ -167,10 +165,11 @@ impl Vm {
     fn store_stack(&mut self, offset: usize, value: Value) -> RuntimeResult<()> {
         let sp = self.sp();
         if offset >= sp {
-            return Err(RuntimeError::StackUnderflow);
+            Err(RuntimeError::StackUnderflow)
+        } else {
+            self.stack[sp - offset - 1] = value;
+            Ok(())
         }
-        self.stack[sp - offset - 1] = value;
-        Ok(())
     }
 
     fn prefix_op(
@@ -269,7 +268,7 @@ impl Vm {
         match obj {
             Obj::Function(function) => {
                 if function.arity() != count {
-                    return Err(FrameError::from(RuntimeError::ArityError));
+                    return Err(Box::from(RuntimeError::ArityError));
                 }
                 self.eval(function)
             }
@@ -279,14 +278,14 @@ impl Vm {
                 self.restore(self.sp() - count);
                 Ok(ret)
             }
-            _ => Err(FrameError::from(RuntimeError::TypeError)),
+            _ => Err(Box::from(RuntimeError::TypeError)),
         }
     }
 
     fn call_method(&mut self, count: usize, name: &Value) -> FrameResult<Value> {
         let name = name.as_obj()?.as_string().ok_or(RuntimeError::TypeError)?;
-        let value = self.load_stack(count)?.clone();
-        let ty = self.get_value_type(&value).unwrap().clone();
+        let value = self.load_stack(count)?;
+        let ty = self.get_value_type(value).unwrap().clone();
         let method = ty.get_method(name).ok_or(RuntimeError::MethodNotFound)?;
         self.call(method, count + 1)
     }
@@ -349,35 +348,35 @@ impl Vm {
                 Ok(Status::Running)
             }
 
-            Op::Add => self.infix_op(|a, b| a + b).map_err(FrameError::from),
-            Op::Sub => self.infix_op(|a, b| a - b).map_err(FrameError::from),
-            Op::Mul => self.infix_op(|a, b| a * b).map_err(FrameError::from),
-            Op::Div => self.infix_op(|a, b| a / b).map_err(FrameError::from),
-            Op::Rem => self.infix_op(|a, b| a % b).map_err(FrameError::from),
-            Op::Pow => self.infix_op(try_pow).map_err(FrameError::from),
+            Op::Add => self.infix_op(|a, b| a + b).map_err(Box::from),
+            Op::Sub => self.infix_op(|a, b| a - b).map_err(Box::from),
+            Op::Mul => self.infix_op(|a, b| a * b).map_err(Box::from),
+            Op::Div => self.infix_op(|a, b| a / b).map_err(Box::from),
+            Op::Rem => self.infix_op(|a, b| a % b).map_err(Box::from),
+            Op::Pow => self.infix_op(try_pow).map_err(Box::from),
 
-            Op::Neg => self.prefix_op(|x| -x).map_err(FrameError::from),
-            Op::Not => self.prefix_op(|x| !x).map_err(FrameError::from),
+            Op::Neg => self.prefix_op(|x| -x).map_err(Box::from),
+            Op::Not => self.prefix_op(|x| !x).map_err(Box::from),
 
             Op::Eq => {
                 let [lhs, rhs] = self.local_view(2)? else {
                     unreachable!()
                 };
                 let value = Value::Bool(lhs == rhs);
-                self.pop_stack()?;
+                let _ = self.pop_stack();
                 let _ = self.store_stack(0, value);
                 Ok(Status::Running)
             }
 
-            Op::Lt => self.infix_op(try_lt).map_err(FrameError::from),
-            Op::Le => self.infix_op(try_le).map_err(FrameError::from),
+            Op::Lt => self.infix_op(try_lt).map_err(Box::from),
+            Op::Le => self.infix_op(try_le).map_err(Box::from),
 
             Op::Call(count) => {
                 let count = count as usize;
-                let value = self.load_stack(count)?.clone();
+                let value = self.load_stack(count)?;
 
-                let obj = value.as_obj()?;
-                let ret = self.call(obj, count)?;
+                let obj = value.as_obj()?.clone();
+                let ret = self.call(&obj, count)?;
                 let _ = self.store_stack(0, ret);
                 Ok(Status::Running)
             }
@@ -393,14 +392,14 @@ impl Vm {
                 self.global.push(value);
                 Ok(Status::Running)
             }
-            Op::LoadIdx => self.load_idx().map_err(FrameError::from),
-            Op::StoreIdx => self.store_idx().map_err(FrameError::from),
+            Op::LoadIdx => self.load_idx().map_err(Box::from),
+            Op::StoreIdx => self.store_idx().map_err(Box::from),
             Op::Load(at) => {
                 let abs = frame.bp() + at;
                 if abs >= self.sp() {
-                    return Err(FrameError::from(RuntimeError::LocalNotFound));
+                    return Err(Box::from(RuntimeError::LocalNotFound));
                 }
-                let value = self.stack[abs].clone();
+                let value = self.stack.as_slice()[abs].clone();
                 self.push_stack(value);
                 Ok(Status::Running)
             }
@@ -417,7 +416,7 @@ impl Vm {
             Op::Restore(count) => {
                 let value = self.pop_stack()?;
                 if count > self.sp() {
-                    return Err(FrameError::from(RuntimeError::StackUnderflow));
+                    return Err(Box::from(RuntimeError::StackUnderflow));
                 }
                 let lp = self.sp() - count;
                 self.restore(lp);
@@ -510,17 +509,17 @@ impl FrameError {
     }
 }
 
-impl From<RuntimeError> for FrameError {
+impl From<RuntimeError> for Box<FrameError> {
     fn from(value: RuntimeError) -> Self {
-        Self {
+        Self::new(FrameError {
             runtime: value,
             spans:   Vec::new(),
-        }
+        })
     }
 }
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
-pub type FrameResult<T> = Result<T, FrameError>;
+pub type FrameResult<T> = Result<T, Box<FrameError>>;
 
 #[cfg(test)]
 mod test {

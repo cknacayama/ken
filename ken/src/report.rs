@@ -59,3 +59,9 @@ impl Report for FrameError {
             )
     }
 }
+
+impl<E: Report> Report for Box<E> {
+    fn diagnose(&self) -> Diagnostic<()> {
+        self.as_ref().diagnose()
+    }
+}
