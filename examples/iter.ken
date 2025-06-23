@@ -1,0 +1,26 @@
+enum Option {
+    Some(t),
+    None
+}
+
+struct Range {
+    start,
+    end,
+
+    fn new(start, end) {
+        Range {
+            start: start,
+            end: end,
+        }
+    }
+
+    fn next(self) {
+        if self >= end {
+            Option::None
+        } else {
+            let cur = self.start;
+            self.start = self.start + 1;
+            Option::Some(cur)
+        }
+    }
+}

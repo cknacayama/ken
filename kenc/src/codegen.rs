@@ -65,7 +65,7 @@ impl GlobalMap {
 }
 
 pub struct Codegen<'a, 'glob> {
-    name:   &'a str,
+    name:   Option<&'a str>,
     global: &'glob mut GlobalMap,
     scope:  Vec<HashMap<&'a str, usize>>,
     local:  usize,
@@ -76,7 +76,7 @@ pub struct Codegen<'a, 'glob> {
 
 impl<'a, 'glob> Codegen<'a, 'glob> {
     #[must_use]
-    pub const fn new(name: &'a str, arity: u8, globals: &'glob mut GlobalMap) -> Self {
+    pub const fn new(name: Option<&'a str>, arity: u8, globals: &'glob mut GlobalMap) -> Self {
         Self {
             name,
             arity,
@@ -86,11 +86,6 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             scope: Vec::new(),
             chunk: ChunkBuilder::new(),
         }
-    }
-
-    #[must_use]
-    pub const fn function_name(&self) -> &'a str {
-        self.name
     }
 
     fn begin_scope(&mut self) -> usize {
@@ -166,11 +161,9 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
 
     #[must_use]
     pub fn finish(mut self) -> Function {
-        let name = if self.name.is_empty() {
-            None
-        } else {
-            Some(self.global.intern(Cow::Borrowed(self.name)))
-        };
+        let name = self
+            .name
+            .map(|name| self.global.intern(Cow::Borrowed(name)));
         self.push_ret();
         let chunk = self.chunk.finish();
         Function::new(name, self.arity as usize, chunk)
@@ -238,6 +231,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             ExprKind::Idx { expr, idx } => self.compile_idx(*expr, *idx, span),
             ExprKind::Table(items) => self.compile_table(items, span),
             ExprKind::Field { expr, field } => self.compile_field(*expr, field, span),
+            ExprKind::Lambda { params, expr } => self.compile_lambda(params, *expr, span),
         }
     }
 
@@ -249,21 +243,21 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         let count = u8::try_from(params.len())
             .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
         let global = self.add_variable(name);
-        let mut codegen = Codegen::new(name, count, self.global);
+        let mut codegen = Codegen::new(Some(name), count, self.global);
         codegen.begin_scope();
         for param in params {
             codegen.add_variable(param);
         }
-        let body = codegen.compile_block(body)?;
+        codegen.compile_block(body)?;
         codegen.scope.pop().unwrap();
 
         let f = Value::from(codegen.finish());
-        self.push_push(f, span);
+        let op = self.push_push(f, span);
         if global {
             self.push_op(Op::AddGlobal, span);
         }
 
-        Ok(body)
+        Ok(op)
     }
 
     fn compile_local(&mut self, local: Local<'a>, span: Span) -> CodegenResult<usize> {
@@ -277,6 +271,29 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         self.bind_variable(local.name, span);
 
         Ok(bind)
+    }
+
+    fn compile_lambda(
+        &mut self,
+        params: Box<[&'a str]>,
+        expr: Expr<'a>,
+        span: Span,
+    ) -> CodegenResult<usize> {
+        let count = u8::try_from(params.len())
+            .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
+        let mut codegen = Codegen::new(None, count, self.global);
+        codegen.begin_scope();
+        for param in params {
+            codegen.add_variable(param);
+        }
+        codegen.compile_expr(expr)?;
+        codegen.scope.pop().unwrap();
+
+        let f = Value::from(codegen.finish());
+        let op = self.push_push(f, span);
+        self.inc_stack(1);
+
+        Ok(op)
     }
 
     fn compile_table(

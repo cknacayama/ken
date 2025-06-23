@@ -178,6 +178,13 @@ pub enum StmtKind<'a> {
     Empty,
 }
 
+impl<'a> StmtKind<'a> {
+    #[must_use]
+    pub const fn is_last(&self) -> bool {
+        matches!(self, Self::Expr(_) | Self::Empty)
+    }
+}
+
 #[derive(Debug)]
 pub struct TableEntry<'a> {
     pub key:   Expr<'a>,
@@ -237,6 +244,11 @@ pub enum ExprKind<'a> {
         op:  InfixOp,
         lhs: Box<Expr<'a>>,
         rhs: Box<Expr<'a>>,
+    },
+
+    Lambda {
+        params: Box<[&'a str]>,
+        expr:   Box<Expr<'a>>,
     },
 }
 

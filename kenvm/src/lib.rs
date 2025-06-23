@@ -428,13 +428,12 @@ impl Vm {
                 Ok(Status::Running)
             }
             Op::Restore(count) => {
-                let value = self.pop_stack()?;
-                if count > self.sp() {
+                if count >= self.sp() {
                     return Err(Box::from(RuntimeError::StackUnderflow));
                 }
-                let lp = self.sp() - count;
+                self.swap_stack(self.sp() - 1, self.sp() - count)?;
+                let lp = self.sp() - count + 1;
                 self.restore(lp);
-                self.push_stack(value);
                 Ok(Status::Running)
             }
             Op::LoadGlobal(at) => {

@@ -1,0 +1,17 @@
+fn map(list, f) {
+    let mapped = [];
+    let i = 0;
+    while i < list.len() {
+        mapped.push(f(list[i]));
+        i = i + 1;
+    };
+    mapped
+}
+
+fn main() {
+    let list = [1,2,3,4,5];
+    let mapped = map(list, fn(x) x * 2);
+    println(mapped);
+}
+
+main();

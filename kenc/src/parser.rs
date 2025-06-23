@@ -259,12 +259,30 @@ impl<'a> Parser<'a> {
         Ok((data, span))
     }
 
-    fn expect_block(&mut self) -> ParseResult<Block<'a>> {
-        let (stmts, span) = self.expect_delimited(Compound, Self::parse_stmt)?;
+    fn parse_block(&mut self, opening: Span) -> ParseResult<Block<'a>> {
+        let mut stmts = Vec::new();
+
+        while !self.check_kind(TokenKind::RBrace) {
+            let stmt = self.parse_stmt()?;
+            let should_break = stmt.kind.is_last();
+            stmts.push(stmt);
+            if should_break {
+                break;
+            }
+        }
+
+        let closing = self.expect(TokenKind::RBrace)?;
+        let span = opening.join(closing);
+
         Ok(Block {
             stmts: stmts.into_boxed_slice(),
             span,
         })
+    }
+
+    fn expect_block(&mut self) -> ParseResult<Block<'a>> {
+        let opening = self.expect(TokenKind::LBrace)?;
+        self.parse_block(opening)
     }
 
     fn parse_infix(&mut self, mut lhs: Expr<'a>, min: u8) -> ParseResult<Expr<'a>> {
@@ -401,11 +419,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::new(kind, span))
             }
             TokenKind::LBrace => {
-                let (stmts, span) = self.parse_delimited(Compound, span, Self::parse_stmt)?;
-                let block = Block {
-                    stmts: stmts.into_boxed_slice(),
-                    span,
-                };
+                let block = self.parse_block(span)?;
                 let kind = ExprKind::Block(block);
                 Ok(Expr::new(kind, span))
             }
@@ -429,6 +443,16 @@ impl<'a> Parser<'a> {
                     },
                 };
 
+                Ok(Expr::new(kind, span))
+            }
+            TokenKind::KwFn => {
+                let (params, _) = self.expect_delimited(Paren, Self::expect_name)?;
+                let expr = self.parse_expr()?;
+                let span = span.join(expr.span);
+                let kind = ExprKind::Lambda {
+                    params: params.into_boxed_slice(),
+                    expr:   Box::new(expr),
+                };
                 Ok(Expr::new(kind, span))
             }
             TokenKind::String(s) => Self::parse_string(s, span),
@@ -536,7 +560,6 @@ trait Delim {
 
 struct Paren;
 struct Bracket;
-struct Compound;
 struct Brace;
 
 impl Delim for Paren {
@@ -571,18 +594,6 @@ impl Delim for Bracket {
     }
     fn separator() -> Option<TokenKind<'static>> {
         Some(TokenKind::Comma)
-    }
-}
-
-impl Delim for Compound {
-    fn opening() -> TokenKind<'static> {
-        TokenKind::LBrace
-    }
-    fn closing() -> TokenKind<'static> {
-        TokenKind::RBrace
-    }
-    fn separator() -> Option<TokenKind<'static>> {
-        None
     }
 }
 

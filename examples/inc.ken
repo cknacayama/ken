@@ -6,4 +6,4 @@ fn main() {
     println(i);
 }
 
-main()
+main();
