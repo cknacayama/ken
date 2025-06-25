@@ -1,22 +1,70 @@
 use std::cell::{Ref, RefCell, RefMut};
+use std::collections::HashMap;
 use std::fmt::Display;
+use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::builtin::Builtin;
 use crate::bytecode::Chunk;
 use crate::hash::Table;
-use crate::ty::Ty;
+use crate::intern::Interned;
+use crate::ty::TyRef;
 use crate::value::Value;
 use crate::{RuntimeError, RuntimeResult};
 
-pub type ObjRef = Rc<Obj>;
+pub type StrRef = Interned<str>;
+
+impl StrRef {
+    #[must_use] pub fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    #[must_use] pub fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjRef(Rc<Obj>);
+
+impl ObjRef {
+    #[must_use]
+    pub fn new(obj: Obj) -> Self {
+        Self(Rc::new(obj))
+    }
+
+    #[must_use]
+    pub fn as_ptr(&self) -> *const Obj {
+        Rc::as_ptr(&self.0)
+    }
+}
+
+impl Deref for ObjRef {
+    type Target = Obj;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<Obj> for ObjRef {
+    fn as_ref(&self) -> &Obj {
+        &self.0
+    }
+}
+
+impl Display for ObjRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(self.as_ref(), f)
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Obj {
     Function(Function),
     Builtin(Builtin),
-    String(Rc<str>),
-    Type(Rc<Ty>),
+    Str(StrRef),
+    Ty(TyRef),
 }
 
 #[derive(Debug, PartialEq)]
@@ -102,12 +150,12 @@ impl MutObj {
 impl Obj {
     #[must_use]
     pub const fn is_pretty(&self) -> bool {
-        matches!(self, Self::String(_))
+        matches!(self, Self::Str(_))
     }
 
     #[must_use]
-    pub const fn as_string(&self) -> Option<&Rc<str>> {
-        if let Self::String(v) = self {
+    pub const fn as_string(&self) -> Option<&StrRef> {
+        if let Self::Str(v) = self {
             Some(v)
         } else {
             None
@@ -117,6 +165,15 @@ impl Obj {
     #[must_use]
     pub const fn as_function(&self) -> Option<&Function> {
         if let Self::Function(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn as_type(&self) -> Option<&TyRef> {
+        if let Self::Ty(v) = self {
             Some(v)
         } else {
             None
@@ -181,14 +238,14 @@ impl MutObjRef {
 
 #[derive(Debug, PartialEq)]
 pub struct Function {
-    name:  Option<Rc<str>>,
+    name:  Option<StrRef>,
     arity: usize,
     chunk: Chunk,
 }
 
 impl Function {
     #[must_use]
-    pub const fn new(name: Option<Rc<str>>, arity: usize, chunk: Chunk) -> Self {
+    pub const fn new(name: Option<StrRef>, arity: usize, chunk: Chunk) -> Self {
         Self { name, arity, chunk }
     }
 
@@ -203,9 +260,15 @@ impl Function {
     }
 
     #[must_use]
-    pub const fn name(&self) -> Option<&Rc<str>> {
+    pub const fn name(&self) -> Option<&StrRef> {
         self.name.as_ref()
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Instance {
+    ty:     TyRef,
+    fields: HashMap<StrRef, ObjRef>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -268,8 +331,8 @@ impl Display for Obj {
                 None => write!(f, "fn{{ arity: {} }}", function.arity()),
             },
             Self::Builtin(builtin) => write!(f, "builtin '{}'", builtin.name()),
-            Self::String(string) => write!(f, "{string}"),
-            Self::Type(ty) => write!(f, "{ty}"),
+            Self::Str(string) => write!(f, "{string}"),
+            Self::Ty(ty) => write!(f, "{ty}"),
         }
     }
 }

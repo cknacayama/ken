@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::{BuildHasher, RandomState};
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
 
+use crate::obj::StrRef;
 use crate::value::Value;
 use crate::{RuntimeError, RuntimeResult};
 
@@ -12,7 +12,7 @@ pub enum HashValue {
     Unit,
     Bool(bool),
     Int(i64),
-    String(Rc<str>),
+    Str(StrRef),
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +78,7 @@ impl Display for HashValue {
             Self::Unit => write!(f, "()"),
             Self::Bool(b) => write!(f, "{b}"),
             Self::Int(x) => write!(f, "{x}"),
-            Self::String(s) => write!(f, "{s}"),
+            Self::Str(s) => write!(f, "{s}"),
         }
     }
 }

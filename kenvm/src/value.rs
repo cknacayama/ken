@@ -1,8 +1,7 @@
 use std::fmt::Display;
-use std::rc::Rc;
 
 use crate::hash::HashValue;
-use crate::obj::{Function, MutObj, MutObjRef, Obj, ObjRef};
+use crate::obj::{Function, MutObj, MutObjRef, Obj, ObjRef, StrRef};
 use crate::{RuntimeError, RuntimeResult};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,7 +38,7 @@ impl Value {
             Self::Bool(b) => Some(HashValue::Bool(*b)),
             Self::Int(x) => Some(HashValue::Int(*x)),
             Self::Obj(obj) => match obj.as_ref() {
-                Obj::String(s) => Some(HashValue::String(s.clone())),
+                Obj::Str(s) => Some(HashValue::Str(s.clone())),
                 _ => None,
             },
             _ => None,
@@ -66,7 +65,7 @@ impl Display for Value {
                 if obj.is_pretty() {
                     write!(f, "{obj}")
                 } else {
-                    let ptr = Rc::as_ptr(obj);
+                    let ptr = obj.as_ptr();
                     write!(f, "<{obj} at {ptr:?}>")
                 }
             }
@@ -99,7 +98,7 @@ macro_rules! value_impl {
         impl From<$val> for Value {
             fn from(value: $val) -> Self {
                 let obj = Obj::$variant(value);
-                Self::Obj(Rc::new(obj))
+                Self::Obj(ObjRef::new(obj))
             }
         }
     };
@@ -119,7 +118,7 @@ value_impl!(i64, Int);
 value_impl!(bool, Bool);
 value_impl!(MutObjRef, MutObj);
 value_impl!(Function, obj Function);
-value_impl!(Rc<str>, obj String);
+value_impl!(StrRef, obj Str);
 value_impl!(Vec<Value>, mut obj List);
 value_impl!(Box<[Value]>, mut obj Tuple);
 

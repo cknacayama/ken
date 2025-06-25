@@ -58,13 +58,15 @@ impl Driver {
                 },
             )
         };
+        let mut vm = Vm::default();
+        let global = GlobalMap::new(&mut vm);
         Self {
             file,
             repl,
             quiet: cfg.quiet,
             max_errors: cfg.max_errors,
-            vm: Vm::default(),
-            global: GlobalMap::default(),
+            vm,
+            global,
         }
     }
 
@@ -134,7 +136,7 @@ impl Driver {
         let mut parser = Parser::new(tokens);
         let ast = parser.parse_all()?;
 
-        let mut code = Codegen::new(None, 0, &mut self.global);
+        let mut code = Codegen::new(None, 0, &mut self.global, &mut self.vm);
         for stmt in ast {
             code.compile_stmt(stmt)?;
         }

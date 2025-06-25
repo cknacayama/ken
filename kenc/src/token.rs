@@ -41,7 +41,6 @@ pub enum TokenKind<'a> {
 
     KwTrue,
     KwFalse,
-    KwTable,
 
     KwFn,
     KwWhile,
@@ -58,7 +57,6 @@ impl<'a> TokenKind<'a> {
         match s {
             "true" => TokenKind::KwTrue,
             "false" => TokenKind::KwFalse,
-            "table" => TokenKind::KwTable,
             "fn" => TokenKind::KwFn,
             "while" => TokenKind::KwWhile,
             "if" => TokenKind::KwIf,
@@ -114,7 +112,6 @@ impl Display for TokenKind<'_> {
             Self::LBracket => write!(f, "["),
             Self::RBracket => write!(f, "]"),
 
-            Self::KwTable => write!(f, "table"),
             Self::KwTrue => write!(f, "true"),
             Self::KwFalse => write!(f, "false"),
             Self::KwFn => write!(f, "fn"),

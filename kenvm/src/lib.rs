@@ -2,10 +2,13 @@ pub mod arith;
 pub mod builtin;
 pub mod bytecode;
 pub mod hash;
+pub mod intern;
 pub mod obj;
 pub mod ty;
 pub mod value;
 
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::rc::Rc;
 
 use kenspan::Span;
@@ -13,8 +16,8 @@ use kenspan::Span;
 use crate::builtin::Builtin;
 use crate::bytecode::{Chunk, Op, OpStream};
 use crate::hash::{HashValue, Table};
-use crate::obj::{Function, MutObj, Obj};
-use crate::ty::{Ty, TyId, Typed};
+use crate::obj::{Function, MutObj, Obj, ObjRef, StrRef};
+use crate::ty::{TyCtx, TyRef};
 use crate::value::Value;
 
 #[derive(Debug, Clone)]
@@ -54,57 +57,67 @@ impl<'a> Frame<'a> {
 }
 
 pub struct Vm {
-    types:  Vec<Rc<Ty>>,
-    stack:  Vec<Value>,
-    global: Vec<Value>,
+    stack:   Vec<Value>,
+    globals: Vec<Value>,
+    strings: HashSet<Rc<str>>,
+    ctx:     TyCtx,
 }
 
 impl Default for Vm {
     fn default() -> Self {
-        let global = Builtin::core_builtins()
+        let mut strings = HashSet::new();
+        let types = TyCtx::new(&mut strings);
+        let globals = Builtin::core_builtins()
             .iter()
             .copied()
-            .map(|b| Value::Obj(Rc::new(Obj::Builtin(b))))
+            .map(|b| Value::Obj(ObjRef::new(Obj::Builtin(b))))
+            .chain(
+                types
+                    .builtin_types()
+                    .into_iter()
+                    .map(|t| Value::Obj(ObjRef::new(Obj::Ty(t)))),
+            )
             .collect();
-        let types = (0..TyId::OBJ.get())
-            .map(|id| {
-                let id = TyId::new(id);
-                let data = id.default_data();
-                Rc::new(data)
-            })
-            .collect();
+
         Self {
-            global,
-            types,
+            globals,
+            strings,
             stack: Vec::new(),
+            ctx: types,
         }
     }
 }
 
 impl Vm {
-    #[must_use]
-    pub fn get_type(&self, id: TyId) -> Option<&Rc<Ty>> {
-        self.types.get(id.get())
-    }
-
-    pub fn get_value_type<T: Typed>(&self, v: &T) -> Option<&Rc<Ty>> {
-        self.get_type(v.ty_id())
-    }
-
-    #[must_use]
-    const fn sp(&self) -> usize {
-        self.stack.len()
-    }
-
-    #[inline]
-    fn restore(&mut self, bp: usize) {
-        self.stack.truncate(bp);
-    }
-
     pub fn eval(&mut self, function: &Function) -> FrameResult<Value> {
         self.eval_function(function)?;
         let value = self.pop_stack()?;
         Ok(value)
+    }
+
+    fn collect_garbage(&mut self) {
+        self.strings.retain(|s| Rc::strong_count(s) > 1);
+    }
+
+    #[must_use]
+    pub const fn ctx(&self) -> &TyCtx {
+        &self.ctx
+    }
+
+    pub fn intern<S>(&mut self, string: S) -> StrRef
+    where
+        Rc<str>: From<S>,
+        S: AsRef<str> + Hash + Eq,
+    {
+        let s = if let Some(string) = self.strings.get(string.as_ref()) {
+            StrRef::new(string.clone())
+        } else {
+            let obj = Rc::from(string);
+            self.strings.insert(obj.clone());
+            StrRef::new(obj)
+        };
+        self.collect_garbage();
+        s
     }
 
     fn eval_function(&mut self, function: &Function) -> FrameResult<()> {
@@ -123,6 +136,21 @@ impl Vm {
                 }
             }
         }
+    }
+
+    #[must_use]
+    const fn sp(&self) -> usize {
+        self.stack.len()
+    }
+
+    #[inline]
+    fn restore(&mut self, bp: usize) {
+        self.stack.truncate(bp);
+    }
+
+    #[must_use]
+    pub fn type_of_value(&self, value: &Value) -> TyRef {
+        self.ctx.type_of_value(value)
     }
 
     const fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
@@ -278,30 +306,41 @@ impl Vm {
         }
     }
 
-    fn call(&mut self, obj: &Obj, count: usize) -> FrameResult<()> {
+    fn call(&mut self, obj: &Obj, count: u8) -> FrameResult<()> {
         match obj {
             Obj::Function(function) => {
-                if function.arity() != count {
+                if function.arity() != count as usize {
                     return Err(Box::from(RuntimeError::ArityError));
                 }
                 self.eval_function(function)
             }
             Obj::Builtin(builtin) => {
+                let count = count as usize;
                 let args = self.local_view(count)?;
                 let ret = builtin(self, args)?;
                 self.restore(self.sp() - count);
                 self.push_stack(ret);
                 Ok(())
             }
+            Obj::Ty(ty) => {
+                let ctor = ty
+                    .as_ref()
+                    .get_ctor(&HashValue::Int(i64::from(count)))
+                    .ok_or(RuntimeError::ArityError)?;
+                self.call(ctor.as_ref(), count)
+            }
             _ => Err(Box::from(RuntimeError::TypeError)),
         }
     }
 
-    fn call_method(&mut self, name: &Value, count: usize) -> FrameResult<()> {
+    fn call_method(&mut self, name: &Value, count: u8) -> FrameResult<()> {
         let name = name.as_obj()?.as_string().ok_or(RuntimeError::TypeError)?;
-        let value = self.load_stack(count)?;
-        let ty = self.get_value_type(value).unwrap().clone();
-        let method = ty.get_method(name).ok_or(RuntimeError::MethodNotFound)?;
+        let value = self.load_stack(count as usize)?;
+        let ty = self.type_of_value(value);
+        let method = ty
+            .as_ref()
+            .get_method(name)
+            .ok_or(RuntimeError::MethodNotFound)?;
         self.call(method, count + 1)
     }
 
@@ -387,8 +426,7 @@ impl Vm {
             Op::Le => self.infix_op(Value::le).map_err(Box::from),
 
             Op::Call(count) => {
-                let count = count as usize;
-                let value = self.load_stack(count)?;
+                let value = self.load_stack(count as usize)?;
 
                 let obj = value.as_obj()?.clone();
                 self.call(&obj, count)?;
@@ -397,12 +435,12 @@ impl Vm {
             }
             Op::CallMethod(count, name) => {
                 let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
-                self.call_method(&name, count as usize)?;
+                self.call_method(&name, count)?;
                 Ok(Status::Running)
             }
             Op::AddGlobal => {
                 let value = self.pop_stack()?;
-                self.global.push(value);
+                self.globals.push(value);
                 Ok(Status::Running)
             }
             Op::LoadIdx => self.load_idx().map_err(Box::from),
@@ -437,14 +475,14 @@ impl Vm {
                 Ok(Status::Running)
             }
             Op::LoadGlobal(at) => {
-                let value = self.global.get(at).ok_or(RuntimeError::GlobalNotFound)?;
+                let value = self.globals.get(at).ok_or(RuntimeError::GlobalNotFound)?;
                 self.push_stack(value.clone());
                 Ok(Status::Running)
             }
             Op::StoreGlobal(at) => {
                 let value = self.pop_stack()?;
                 let global = self
-                    .global
+                    .globals
                     .get_mut(at)
                     .ok_or(RuntimeError::GlobalNotFound)?;
                 *global = value;

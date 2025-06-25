@@ -1,46 +1,45 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::rc::Rc;
 
 use kenspan::{Span, Spand};
+use kenvm::Vm;
 use kenvm::builtin::Builtin;
 use kenvm::bytecode::{ChunkBuilder, Op};
-use kenvm::obj::Function;
+use kenvm::obj::{Function, StrRef};
 use kenvm::value::Value;
 
 use crate::ast::{
     Block, Expr, ExprKind, Fn, InfixOp, Item, ItemKind, Local, PrefixOp, Stmt, StmtKind, TableEntry,
 };
 
-#[derive(Debug)]
 pub struct GlobalMap {
     globals: HashMap<Rc<str>, usize>,
-    strings: HashSet<Rc<str>>,
     current: usize,
 }
 
-impl Default for GlobalMap {
-    fn default() -> Self {
-        let builtins = Builtin::core_builtins();
-        let current = builtins.len();
-        let globals = builtins
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(at, b)| (Rc::from(b.name()), at))
-            .collect::<HashMap<_, _>>();
-        let strings = globals.keys().cloned().collect();
-        Self {
-            globals,
-            strings,
-            current,
-        }
-    }
-}
-
 impl GlobalMap {
-    fn add(&mut self, name: &str) -> usize {
-        let name = self.intern(Cow::Borrowed(name));
+    pub fn new(vm: &mut Vm) -> Self {
+        let builtins = Builtin::core_builtins();
+        let builtin_types = vm.ctx().builtin_types();
+        let current = builtins.len() + builtin_types.len();
+        let globals = builtins
+            .into_iter()
+            .map(|b| vm.intern(b.name()).take())
+            .chain(
+                builtin_types
+                    .into_iter()
+                    .map(|t| t.take().name().clone().take()),
+            )
+            .enumerate()
+            .map(|(at, b)| (b, at))
+            .collect::<HashMap<_, _>>();
+
+        Self { globals, current }
+    }
+
+    fn add(&mut self, name: Rc<str>) -> usize {
         let at = self.current;
         self.current += 1;
         self.globals.insert(name, at);
@@ -51,22 +50,12 @@ impl GlobalMap {
     fn get(&self, name: &str) -> Option<usize> {
         self.globals.get(name).copied()
     }
-
-    #[must_use]
-    fn intern(&mut self, s: Cow<'_, str>) -> Rc<str> {
-        if let Some(s) = self.strings.get(&*s) {
-            s.clone()
-        } else {
-            let s = Rc::<str>::from(s);
-            self.strings.insert(s.clone());
-            s
-        }
-    }
 }
 
-pub struct Codegen<'a, 'glob> {
-    name:   Option<&'a str>,
+pub struct Codegen<'a, 'vm, 'glob> {
+    vm:     &'vm mut Vm,
     global: &'glob mut GlobalMap,
+    name:   Option<&'a str>,
     scope:  Vec<HashMap<&'a str, usize>>,
     local:  usize,
     stack:  usize,
@@ -74,18 +63,33 @@ pub struct Codegen<'a, 'glob> {
     chunk:  ChunkBuilder,
 }
 
-impl<'a, 'glob> Codegen<'a, 'glob> {
+impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
     #[must_use]
-    pub const fn new(name: Option<&'a str>, arity: u8, globals: &'glob mut GlobalMap) -> Self {
+    pub const fn new(
+        name: Option<&'a str>,
+        arity: u8,
+        global: &'glob mut GlobalMap,
+        vm: &'vm mut Vm,
+    ) -> Self {
         Self {
             name,
             arity,
+            vm,
+            global,
             stack: 0,
             local: 0,
-            global: globals,
             scope: Vec::new(),
             chunk: ChunkBuilder::new(),
         }
+    }
+
+    #[must_use]
+    fn intern<S>(&mut self, s: S) -> StrRef
+    where
+        Rc<str>: From<S>,
+        S: AsRef<str> + Hash + Eq,
+    {
+        self.vm.intern(s)
     }
 
     fn begin_scope(&mut self) -> usize {
@@ -109,7 +113,8 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             scope.insert(name, pos);
             false
         } else {
-            self.global.add(name);
+            let name = self.intern(name);
+            self.global.add(name.as_rc().clone());
             true
         }
     }
@@ -122,11 +127,11 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         }
     }
 
-    fn get_global(&self, name: &'a str) -> Option<usize> {
+    fn get_global(&self, name: &str) -> Option<usize> {
         self.global.get(name)
     }
 
-    fn get_local(&self, name: &'a str) -> Option<usize> {
+    fn get_local(&self, name: &str) -> Option<usize> {
         self.scope
             .iter()
             .rev()
@@ -161,9 +166,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
 
     #[must_use]
     pub fn finish(mut self) -> Function {
-        let name = self
-            .name
-            .map(|name| self.global.intern(Cow::Borrowed(name)));
+        let name = self.name.map(|name| self.intern(name));
         self.push_ret();
         let chunk = self.chunk.finish();
         Function::new(name, self.arity as usize, chunk)
@@ -229,7 +232,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             ExprKind::While { cond, body } => self.compile_while(*cond, body, span),
             ExprKind::List { tuple, items } => self.compile_list(tuple, items, span),
             ExprKind::Idx { expr, idx } => self.compile_idx(*expr, *idx, span),
-            ExprKind::Table(items) => self.compile_table(items, span),
+            ExprKind::Construct { expr, fields } => self.compile_construct(*expr, fields, span),
             ExprKind::Field { expr, field } => self.compile_field(*expr, field, span),
             ExprKind::Lambda { params, expr } => self.compile_lambda(params, *expr, span),
         }
@@ -243,7 +246,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         let count = u8::try_from(params.len())
             .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
         let global = self.add_variable(name);
-        let mut codegen = Codegen::new(Some(name), count, self.global);
+        let mut codegen = Codegen::new(Some(name), count, self.global, self.vm);
         codegen.begin_scope();
         for param in params {
             codegen.add_variable(param);
@@ -281,7 +284,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     ) -> CodegenResult<usize> {
         let count = u8::try_from(params.len())
             .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
-        let mut codegen = Codegen::new(None, count, self.global);
+        let mut codegen = Codegen::new(None, count, self.global, self.vm);
         codegen.begin_scope();
         for param in params {
             codegen.add_variable(param);
@@ -296,17 +299,19 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         Ok(op)
     }
 
-    fn compile_table(
+    fn compile_construct(
         &mut self,
+        expr: Expr<'a>,
         entries: Box<[TableEntry<'a>]>,
         span: Span,
     ) -> CodegenResult<usize> {
+        let expr = self.compile_expr(expr)?;
         let count = entries.len();
-        let entries = self.compile_many(entries, Self::compile_entry)?;
-        let end = self.push_op(Op::MakeTable(count), span);
+        self.compile_many(entries, Self::compile_entry)?;
+        self.push_op(Op::MakeTable(count), span);
         self.dec_stack(count * 2);
-        self.inc_stack(1);
-        Ok(entries.unwrap_or(end))
+        self.push_op(Op::Call(1), span);
+        Ok(expr)
     }
 
     fn compile_entry(&mut self, entry: TableEntry<'a>) -> CodegenResult<usize> {
@@ -322,7 +327,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
         span: Span,
     ) -> CodegenResult<usize> {
         let expr = self.compile_expr(expr)?;
-        let field = self.global.intern(Cow::Borrowed(field));
+        let field = self.intern(field);
         self.push_push(Value::from(field), span);
         self.push_op(Op::LoadIdx, span);
         Ok(expr)
@@ -404,7 +409,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     ) -> CodegenResult<usize> {
         let (callee, method) = match callee.kind {
             ExprKind::Field { expr, field } => {
-                let field = self.global.intern(Cow::Borrowed(field));
+                let field = self.intern(field);
                 let at = self.chunk.push_value(Value::from(field));
                 (self.compile_expr(*expr)?, Some(at))
             }
@@ -455,7 +460,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
     }
 
     fn compile_str_expr(&mut self, s: Cow<'a, str>, span: Span) -> usize {
-        let s = self.global.intern(s);
+        let s = self.intern(s);
         let op = self.push_push(Value::from(s), span);
         self.inc_stack(1);
         op
@@ -495,7 +500,7 @@ impl<'a, 'glob> Codegen<'a, 'glob> {
             }
             ExprKind::Field { expr, field } => {
                 let expr = self.compile_expr(*expr)?;
-                let field = self.global.intern(Cow::Borrowed(field));
+                let field = self.intern(field);
                 self.push_push(Value::from(field), span);
                 self.push_op(Op::StoreIdx, span);
                 self.dec_stack(1);

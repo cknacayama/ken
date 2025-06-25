@@ -1,0 +1,11 @@
+fn main() {
+    let t = table {
+        foo: 10,
+        bar: "bar",
+    };
+    println(type(t));
+    println(t.len());
+
+}
+
+main();

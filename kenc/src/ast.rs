@@ -178,7 +178,7 @@ pub enum StmtKind<'a> {
     Empty,
 }
 
-impl<'a> StmtKind<'a> {
+impl StmtKind<'_> {
     #[must_use]
     pub const fn is_last(&self) -> bool {
         matches!(self, Self::Expr(_) | Self::Empty)
@@ -199,8 +199,6 @@ pub enum ExprKind<'a> {
     Float(f64),
     Integer(u32),
     String(Cow<'a, str>),
-
-    Table(Box<[TableEntry<'a>]>),
 
     Block(Block<'a>),
 
@@ -223,6 +221,11 @@ pub enum ExprKind<'a> {
     Call {
         callee: Box<Expr<'a>>,
         args:   Box<[Expr<'a>]>,
+    },
+
+    Construct {
+        expr:   Box<Expr<'a>>,
+        fields: Box<[TableEntry<'a>]>,
     },
 
     Idx {

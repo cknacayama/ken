@@ -224,8 +224,13 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_expr(&mut self) -> ParseResult<Expr<'a>> {
-        let expr = self.parse_prefix()?;
-        self.parse_infix(expr, 0)
+        let expr = self.parse_prefix::<true>()?;
+        self.parse_infix::<true>(expr, 0)
+    }
+
+    pub fn parse_no_table_expr(&mut self) -> ParseResult<Expr<'a>> {
+        let expr = self.parse_prefix::<false>()?;
+        self.parse_infix::<false>(expr, 0)
     }
 
     fn expect_delimited<D: Delim, T>(
@@ -285,7 +290,7 @@ impl<'a> Parser<'a> {
         self.parse_block(opening)
     }
 
-    fn parse_infix(&mut self, mut lhs: Expr<'a>, min: u8) -> ParseResult<Expr<'a>> {
+    fn parse_infix<const T: bool>(&mut self, mut lhs: Expr<'a>, min: u8) -> ParseResult<Expr<'a>> {
         while let Some(op) = self
             .peek()
             .and_then(|tk| InfixOp::from_token(tk.kind))
@@ -293,7 +298,7 @@ impl<'a> Parser<'a> {
             .filter(|op| op.prec() >= min)
         {
             self.eat();
-            let mut rhs = self.parse_prefix()?;
+            let mut rhs = self.parse_prefix::<T>()?;
             while let Some(new) = self
                 .peek()
                 .and_then(|tk| InfixOp::from_token(tk.kind))
@@ -309,7 +314,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 let min = op.prec() + u8::from(new.prec() > op.prec());
-                rhs = self.parse_infix(rhs, min)?;
+                rhs = self.parse_infix::<T>(rhs, min)?;
             }
             let span = lhs.span.join(rhs.span);
             let kind = ExprKind::Infix {
@@ -323,14 +328,14 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn parse_prefix(&mut self) -> ParseResult<Expr<'a>> {
+    fn parse_prefix<const T: bool>(&mut self) -> ParseResult<Expr<'a>> {
         match self.peek() {
             Some(Token {
                 kind: TokenKind::Minus,
                 span,
             }) => {
                 self.eat();
-                let expr = self.parse_prefix()?;
+                let expr = self.parse_prefix::<T>()?;
                 let span = span.join(expr.span);
                 let kind = ExprKind::Prefix {
                     op:   PrefixOp::Neg,
@@ -338,11 +343,11 @@ impl<'a> Parser<'a> {
                 };
                 Ok(Expr::new(kind, span))
             }
-            _ => self.parse_postfix(),
+            _ => self.parse_postfix::<T>(),
         }
     }
 
-    fn parse_postfix(&mut self) -> ParseResult<Expr<'a>> {
+    fn parse_postfix<const T: bool>(&mut self) -> ParseResult<Expr<'a>> {
         let mut expr = self.parse_primary()?;
         loop {
             match self.peek() {
@@ -373,6 +378,20 @@ impl<'a> Parser<'a> {
                     expr = Expr::new(kind, span);
                 }
                 Some(Token {
+                    kind: TokenKind::LBrace,
+                    span,
+                }) if T => {
+                    self.eat();
+                    let (entries, entries_span) =
+                        self.parse_delimited(Brace, span, Self::parse_entry)?;
+                    let span = span.join(entries_span);
+                    let kind = ExprKind::Construct {
+                        expr:   Box::new(expr),
+                        fields: entries.into_boxed_slice(),
+                    };
+                    expr = Expr::new(kind, span);
+                }
+                Some(Token {
                     kind: TokenKind::Dot,
                     ..
                 }) => {
@@ -396,7 +415,7 @@ impl<'a> Parser<'a> {
 
         match kind {
             TokenKind::KwIf => {
-                let cond = self.parse_expr()?;
+                let cond = self.parse_no_table_expr()?;
                 let then = self.expect_block()?;
                 self.expect(TokenKind::KwElse)?;
                 let els = self.expect_block()?;
@@ -409,7 +428,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::new(kind, span))
             }
             TokenKind::KwWhile => {
-                let cond = self.parse_expr()?;
+                let cond = self.parse_no_table_expr()?;
                 let body = self.expect_block()?;
                 let span = span.join(body.span);
                 let kind = ExprKind::While {
@@ -477,12 +496,6 @@ impl<'a> Parser<'a> {
                 let x = Self::parse_number(lit)
                     .map_err(|_| ParseError::new(ParseErrorKind::IntegerTooBig, span))?;
                 let kind = ExprKind::Integer(x);
-                Ok(Expr::new(kind, span))
-            }
-            TokenKind::KwTable => {
-                let (entries, entries_span) = self.expect_delimited(Brace, Self::parse_entry)?;
-                let span = span.join(entries_span);
-                let kind = ExprKind::Table(entries.into_boxed_slice());
                 Ok(Expr::new(kind, span))
             }
 

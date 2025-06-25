@@ -14,3 +14,6 @@ enum_glob_use = { level = "deny", priority = -1 }
 missing_panics_doc = "allow"
 missing_errors_doc = "allow"
 too_many_lines = "allow"
+
+# false positive
+option_if_let_else = "allow"

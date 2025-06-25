@@ -16,11 +16,11 @@ struct Range {
 
     fn next(self) {
         if self >= end {
-            Option::None
+            Option.None
         } else {
             let cur = self.start;
             self.start = self.start + 1;
-            Option::Some(cur)
+            Option.Some(cur)
         }
     }
 }
