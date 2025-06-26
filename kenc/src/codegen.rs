@@ -232,7 +232,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
             ExprKind::While { cond, body } => self.compile_while(*cond, body, span),
             ExprKind::List { tuple, items } => self.compile_list(tuple, items, span),
             ExprKind::Idx { expr, idx } => self.compile_idx(*expr, *idx, span),
-            ExprKind::Construct { expr, fields } => self.compile_construct(*expr, fields, span),
+            ExprKind::Table { fields } => self.compile_table(fields, span),
             ExprKind::Field { expr, field } => self.compile_field(*expr, field, span),
             ExprKind::Lambda { params, expr } => self.compile_lambda(params, *expr, span),
         }
@@ -299,19 +299,17 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
         Ok(op)
     }
 
-    fn compile_construct(
+    fn compile_table(
         &mut self,
-        expr: Expr<'a>,
         entries: Box<[TableEntry<'a>]>,
         span: Span,
     ) -> CodegenResult<usize> {
-        let expr = self.compile_expr(expr)?;
         let count = entries.len();
-        self.compile_many(entries, Self::compile_entry)?;
-        self.push_op(Op::MakeTable(count), span);
+        let entries = self.compile_many(entries, Self::compile_entry)?;
+        let make = self.push_op(Op::MakeTable(count), span);
         self.dec_stack(count * 2);
-        self.push_op(Op::Call(1), span);
-        Ok(expr)
+        self.inc_stack(1);
+        Ok(entries.unwrap_or(make))
     }
 
     fn compile_entry(&mut self, entry: TableEntry<'a>) -> CodegenResult<usize> {

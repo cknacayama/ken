@@ -223,8 +223,7 @@ pub enum ExprKind<'a> {
         args:   Box<[Expr<'a>]>,
     },
 
-    Construct {
-        expr:   Box<Expr<'a>>,
+    Table {
         fields: Box<[TableEntry<'a>]>,
     },
 
@@ -253,6 +252,13 @@ pub enum ExprKind<'a> {
         params: Box<[&'a str]>,
         expr:   Box<Expr<'a>>,
     },
+}
+
+impl<'a> From<Block<'a>> for Expr<'a> {
+    fn from(value: Block<'a>) -> Self {
+        let span = value.span;
+        Self::new(ExprKind::Block(value), span)
+    }
 }
 
 pub type Expr<'a> = Spand<ExprKind<'a>>;
