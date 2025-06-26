@@ -7,12 +7,16 @@ fn main() {
         i = i + 1;
     };
 
+    println(list);
+
     let i = 0;
     
     while i < list.len() {
         list[i] = list[i] * 2;
         i = i + 1;
     };
+
+    println(list);
 }
 
 main();

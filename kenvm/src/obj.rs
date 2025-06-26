@@ -15,11 +15,13 @@ use crate::{RuntimeError, RuntimeResult};
 pub type StrRef = Interned<str>;
 
 impl StrRef {
-    #[must_use] pub fn len(&self) -> usize {
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.as_ref().len()
     }
 
-    #[must_use] pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.as_ref().is_empty()
     }
 }
@@ -178,6 +180,11 @@ impl Obj {
         } else {
             None
         }
+    }
+
+    #[must_use]
+    pub const fn is_ty(&self) -> bool {
+        matches!(self, Self::Ty(..))
     }
 }
 

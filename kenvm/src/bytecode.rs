@@ -156,32 +156,15 @@ impl Chunk {
     }
 
     #[must_use]
-    fn fetch_value(&self, at: usize) -> Option<Value> {
-        self.vals.get(at).cloned()
+    fn fetch_value(&self, at: usize) -> Option<&Value> {
+        self.vals.get(at)
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct OpStream<'a> {
+pub(super) struct OpStream<'a> {
     chunk: &'a Chunk,
     ip:    usize,
-}
-
-impl OpStream<'_> {
-    pub const fn fetch(&mut self) -> Option<Op> {
-        let slice = &*self.chunk.ops;
-        if self.ip < slice.len() {
-            let op = slice[self.ip];
-            self.ip += 1;
-            Some(op)
-        } else {
-            None
-        }
-    }
-
-    pub fn fetch_span(&mut self) -> Option<Span> {
-        self.chunk.fetch_span(self.ip - 1)
-    }
 }
 
 impl<'a> OpStream<'a> {
@@ -191,12 +174,25 @@ impl<'a> OpStream<'a> {
     }
 
     #[must_use]
-    pub(crate) fn fetch_value(&self, at: usize) -> Option<Value> {
+    pub fn fetch_value(&self, at: usize) -> Option<&Value> {
         self.chunk.fetch_value(at)
     }
 
-    pub(crate) const fn jump(&mut self, to: usize) {
+    pub const fn jump(&mut self, to: usize) {
         self.ip = to;
+    }
+
+    pub fn fetch(&mut self) -> Option<Op> {
+        self.chunk
+            .ops
+            .get(self.ip)
+            .inspect(|_| self.ip += 1)
+            .copied()
+    }
+
+    #[must_use]
+    pub fn fetch_span(&self) -> Option<Span> {
+        self.chunk.fetch_span(self.ip - 1)
     }
 }
 

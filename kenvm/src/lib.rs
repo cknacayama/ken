@@ -42,7 +42,7 @@ impl<'a> Frame<'a> {
     }
 
     #[must_use]
-    fn fetch_value(&self, at: usize) -> Option<Value> {
+    fn fetch_value(&self, at: usize) -> Option<&Value> {
         self.stream.fetch_value(at)
     }
 
@@ -95,10 +95,6 @@ impl Vm {
         Ok(value)
     }
 
-    fn collect_garbage(&mut self) {
-        self.strings.retain(|s| Rc::strong_count(s) > 1);
-    }
-
     #[must_use]
     pub const fn ctx(&self) -> &TyCtx {
         &self.ctx
@@ -109,15 +105,13 @@ impl Vm {
         Rc<str>: From<S>,
         S: AsRef<str> + Hash + Eq,
     {
-        let s = if let Some(string) = self.strings.get(string.as_ref()) {
+        if let Some(string) = self.strings.get(string.as_ref()) {
             StrRef::new(string.clone())
         } else {
             let obj = Rc::from(string);
             self.strings.insert(obj.clone());
             StrRef::new(obj)
-        };
-        self.collect_garbage();
-        s
+        }
     }
 
     fn eval_function(&mut self, function: &Function) -> FrameResult<()> {
@@ -149,7 +143,7 @@ impl Vm {
     }
 
     #[must_use]
-    pub fn type_of_value(&self, value: &Value) -> TyRef {
+    pub(crate) fn type_of_value(&self, value: &Value) -> TyRef {
         self.ctx.type_of_value(value)
     }
 
@@ -198,7 +192,6 @@ impl Vm {
         Ok(self.stack.drain(self.stack.len() - len..))
     }
 
-    #[inline(never)]
     const fn load_stack(&self, offset: usize) -> RuntimeResult<&Value> {
         let sp = self.sp();
         if offset >= sp {
@@ -306,6 +299,7 @@ impl Vm {
         }
     }
 
+    #[inline(always)]
     fn call(&mut self, obj: &Obj, count: u8) -> FrameResult<()> {
         match obj {
             Obj::Function(function) => {
@@ -356,7 +350,7 @@ impl Vm {
 
             Op::Push(at) => {
                 let value = frame.fetch_value(at).ok_or(RuntimeError::NoValue)?;
-                self.push_stack(value);
+                self.push_stack(value.clone());
                 Ok(Status::Running)
             }
 
@@ -435,7 +429,7 @@ impl Vm {
             }
             Op::CallMethod(count, name) => {
                 let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
-                self.call_method(&name, count)?;
+                self.call_method(name, count)?;
                 Ok(Status::Running)
             }
             Op::AddGlobal => {
