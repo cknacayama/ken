@@ -34,7 +34,7 @@ struct Frame<'a> {
 
 impl<'a> Frame<'a> {
     #[must_use]
-    const fn new(chunk: &'a Chunk, bp: usize) -> Self {
+    fn new(chunk: &'a Chunk, bp: usize) -> Self {
         Self {
             stream: OpStream::new(chunk),
             bp,
@@ -46,8 +46,19 @@ impl<'a> Frame<'a> {
         self.stream.fetch_value(at)
     }
 
-    const fn jump(&mut self, to: usize) {
-        self.stream.jump(to);
+    #[must_use]
+    fn fetch(&mut self) -> Option<&Op> {
+        self.stream.fetch()
+    }
+
+    #[must_use]
+    fn fetch_span(&self) -> Option<Span> {
+        self.stream.fetch_span()
+    }
+
+    #[must_use]
+    fn jump(&mut self, to: usize) -> bool {
+        self.stream.jump(to)
     }
 
     #[must_use]
@@ -82,7 +93,7 @@ impl Default for Vm {
         Self {
             globals,
             strings,
-            stack: Vec::new(),
+            stack: Vec::with_capacity(256),
             ctx: types,
         }
     }
@@ -123,7 +134,7 @@ impl Vm {
                 Ok(Status::Running) => {}
                 Ok(Status::Finished) => break Ok(()),
                 Err(mut err) => {
-                    let span = frame.stream.fetch_span().unwrap_or_default();
+                    let span = frame.fetch_span().unwrap_or_default();
                     self.restore(sp);
                     err.spans.push(span);
                     break Err(err);
@@ -147,7 +158,7 @@ impl Vm {
         self.ctx.type_of_value(value)
     }
 
-    const fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
+    fn create_frame<'a>(&self, function: &'a Function) -> Frame<'a> {
         let bp = self.sp() - function.arity();
         Frame::new(function.chunk(), bp)
     }
@@ -299,7 +310,6 @@ impl Vm {
         }
     }
 
-    #[inline(always)]
     fn call(&mut self, obj: &Obj, count: u8) -> FrameResult<()> {
         match obj {
             Obj::Function(function) => {
@@ -339,9 +349,9 @@ impl Vm {
     }
 
     fn eval_next(&mut self, frame: &mut Frame) -> FrameResult<Status> {
-        let op = frame.stream.fetch().ok_or(RuntimeError::FetchError)?;
+        let op = frame.fetch().ok_or(RuntimeError::FetchError)?;
 
-        match op {
+        match *op {
             Op::Nop => Ok(Status::Running),
             Op::Pop => {
                 self.pop_stack()?;
@@ -483,13 +493,19 @@ impl Vm {
                 Ok(Status::Running)
             }
             Op::Jmp(ip) => {
-                frame.jump(ip);
-                Ok(Status::Running)
+                if frame.jump(ip) {
+                    Ok(Status::Running)
+                } else {
+                    Err(Box::from(RuntimeError::FetchError))
+                }
             }
             Op::JmpIfNot(ip) => match self.pop_stack()? {
                 Value::Bool(false) => {
-                    frame.jump(ip);
-                    Ok(Status::Running)
+                    if frame.jump(ip) {
+                        Ok(Status::Running)
+                    } else {
+                        Err(Box::from(RuntimeError::FetchError))
+                    }
                 }
                 Value::Bool(true) => Ok(Status::Running),
                 _ => Err(Box::from(RuntimeError::TypeError)),

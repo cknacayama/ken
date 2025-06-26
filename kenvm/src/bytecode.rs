@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::slice::Iter;
 
 use kenspan::Span;
 
@@ -161,16 +162,19 @@ impl Chunk {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct OpStream<'a> {
     chunk: &'a Chunk,
-    ip:    usize,
+    iter:  Iter<'a, Op>,
 }
 
 impl<'a> OpStream<'a> {
     #[must_use]
-    pub const fn new(chunk: &'a Chunk) -> Self {
-        Self { chunk, ip: 0 }
+    pub fn new(chunk: &'a Chunk) -> Self {
+        Self {
+            chunk,
+            iter: chunk.ops.iter(),
+        }
     }
 
     #[must_use]
@@ -178,21 +182,26 @@ impl<'a> OpStream<'a> {
         self.chunk.fetch_value(at)
     }
 
-    pub const fn jump(&mut self, to: usize) {
-        self.ip = to;
+    #[must_use]
+    pub fn jump(&mut self, to: usize) -> bool {
+        if to >= self.chunk.ops.len() {
+            false
+        } else {
+            self.iter = self.chunk.ops[to..].iter();
+            true
+        }
     }
 
-    pub fn fetch(&mut self) -> Option<Op> {
-        self.chunk
-            .ops
-            .get(self.ip)
-            .inspect(|_| self.ip += 1)
-            .copied()
+    #[must_use]
+    pub fn fetch(&mut self) -> Option<&Op> {
+        self.iter.next()
     }
 
     #[must_use]
     pub fn fetch_span(&self) -> Option<Span> {
-        self.chunk.fetch_span(self.ip - 1)
+        let len = self.chunk.ops.len();
+        let remaining = self.iter.len();
+        self.chunk.fetch_span(len - remaining - 1)
     }
 }
 
@@ -241,11 +250,11 @@ impl Display for OpStream<'_> {
             return Ok(());
         }
         let max = self.chunk.len().ilog10() as usize + 1;
-        let mut stream = *self;
-        let mut ip = stream.ip;
+        let mut stream = self.clone();
+        let mut ip = 0;
         while let Some(op) = stream.fetch() {
             writeln!(f, "    {ip:>max$}:    {op}")?;
-            ip = stream.ip;
+            ip += 1;
         }
         Ok(())
     }
