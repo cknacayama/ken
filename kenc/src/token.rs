@@ -25,6 +25,13 @@ pub enum TokenKind<'a> {
 
     Eq,
 
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
+    CaretEq,
+
     EqEq,
     BangEq,
     GreaterEq,
@@ -42,6 +49,8 @@ pub enum TokenKind<'a> {
     KwTrue,
     KwFalse,
 
+    KwStruct,
+    KwEnum,
     KwFn,
     KwWhile,
     KwIf,
@@ -57,6 +66,8 @@ impl<'a> TokenKind<'a> {
         match s {
             "true" => TokenKind::KwTrue,
             "false" => TokenKind::KwFalse,
+            "struct" => TokenKind::KwStruct,
+            "enum" => TokenKind::KwEnum,
             "fn" => TokenKind::KwFn,
             "while" => TokenKind::KwWhile,
             "if" => TokenKind::KwIf,
@@ -92,6 +103,13 @@ impl Display for TokenKind<'_> {
             Self::Bang => write!(f, "!"),
             Self::Eq => write!(f, "="),
 
+            Self::PlusEq => write!(f, "+="),
+            Self::MinusEq => write!(f, "-="),
+            Self::StarEq => write!(f, "*="),
+            Self::SlashEq => write!(f, "/="),
+            Self::PercentEq => write!(f, "%="),
+            Self::CaretEq => write!(f, "^="),
+
             Self::EqEq => write!(f, "=="),
             Self::BangEq => write!(f, "!="),
             Self::Less => write!(f, "<"),
@@ -112,6 +130,8 @@ impl Display for TokenKind<'_> {
             Self::LBracket => write!(f, "["),
             Self::RBracket => write!(f, "]"),
 
+            Self::KwStruct => write!(f, "struct"),
+            Self::KwEnum => write!(f, "enum"),
             Self::KwTrue => write!(f, "true"),
             Self::KwFalse => write!(f, "false"),
             Self::KwFn => write!(f, "fn"),

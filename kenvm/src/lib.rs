@@ -370,7 +370,7 @@ impl Vm {
                 Ok(Status::Running)
             }
 
-            Op::PushU32(int) => {
+            Op::PushInt(int) => {
                 let value = Value::Int(i64::from(int));
                 self.push_stack(value);
                 Ok(Status::Running)
@@ -426,8 +426,20 @@ impl Vm {
                 Ok(Status::Running)
             }
 
+            Op::Ne => {
+                let [lhs, rhs] = self.local_view(2)? else {
+                    unreachable!()
+                };
+                let value = Value::Bool(lhs != rhs);
+                let _ = self.pop_stack();
+                let _ = self.store_stack(0, value);
+                Ok(Status::Running)
+            }
+
             Op::Lt => self.infix_op(Value::lt).map_err(Box::from),
             Op::Le => self.infix_op(Value::le).map_err(Box::from),
+            Op::Gt => self.infix_op(Value::gt).map_err(Box::from),
+            Op::Ge => self.infix_op(Value::ge).map_err(Box::from),
 
             Op::Call(count) => {
                 let value = self.load_stack(count as usize)?;
@@ -437,34 +449,35 @@ impl Vm {
                 let _ = self.swap_remove(self.sp() - 2);
                 Ok(Status::Running)
             }
+
             Op::CallMethod(count, name) => {
                 let name = frame.fetch_value(name).ok_or(RuntimeError::NoValue)?;
                 self.call_method(name, count)?;
                 Ok(Status::Running)
             }
+
             Op::AddGlobal => {
                 let value = self.pop_stack()?;
                 self.globals.push(value);
                 Ok(Status::Running)
             }
+
             Op::LoadIdx => self.load_idx().map_err(Box::from),
             Op::StoreIdx => self.store_idx().map_err(Box::from),
             Op::Load(at) => {
-                let abs = frame.bp() + at;
-                if abs >= self.sp() {
-                    return Err(Box::from(RuntimeError::LocalNotFound));
-                }
-
-                let value = self.stack.as_slice()[abs].clone();
+                let value = self
+                    .stack
+                    .get(frame.bp() + at)
+                    .ok_or(RuntimeError::LocalNotFound)?
+                    .clone();
                 self.push_stack(value);
                 Ok(Status::Running)
             }
             Op::Store(at) => {
                 let value = self.pop_stack()?;
-                let bp = frame.bp();
                 let local = self
                     .stack
-                    .get_mut(bp + at)
+                    .get_mut(frame.bp() + at)
                     .ok_or(RuntimeError::LocalNotFound)?;
                 *local = value;
                 Ok(Status::Running)
@@ -593,8 +606,8 @@ mod test {
         let mut vm = Vm::default();
         let mut builder = ChunkBuilder::new();
         let span = Span::default();
-        builder.push_op(Op::PushU32(1), span);
-        builder.push_op(Op::PushU32(2), span);
+        builder.push_op(Op::PushInt(1), span);
+        builder.push_op(Op::PushInt(2), span);
         builder.push_op(Op::Add, span);
         builder.push_op(Op::Ret, span);
         let chunk = builder.finish();

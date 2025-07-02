@@ -95,8 +95,13 @@ pub enum InfixOp {
     Ge,
     Lt,
     Le,
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignOp {
     Assign,
+    InfixAssign(InfixOp),
+    Infix(InfixOp),
 }
 
 impl Operator for PrefixOp {
@@ -117,7 +122,6 @@ impl Operator for PrefixOp {
 impl Operator for InfixOp {
     fn as_operator(self) -> (u8, Fixity) {
         match self {
-            Self::Assign => (1, Fixity::Infix),
             Self::Eq | Self::Ne | Self::Gt | Self::Ge | Self::Lt | Self::Le => (2, Fixity::Infix),
             Self::Add | Self::Sub => (3, Fixity::InfixLeft),
             Self::Mul | Self::Div | Self::Rem => (4, Fixity::InfixLeft),
@@ -133,7 +137,6 @@ impl Operator for InfixOp {
             TokenKind::Slash => Some(Self::Div),
             TokenKind::Percent => Some(Self::Rem),
             TokenKind::Caret => Some(Self::Pow),
-            TokenKind::Eq => Some(Self::Assign),
             TokenKind::EqEq => Some(Self::Eq),
             TokenKind::BangEq => Some(Self::Ne),
             TokenKind::Greater => Some(Self::Gt),
@@ -145,32 +148,54 @@ impl Operator for InfixOp {
     }
 }
 
-#[derive(Debug)]
+impl Operator for AssignOp {
+    fn as_operator(self) -> (u8, Fixity) {
+        match self {
+            Self::Assign | Self::InfixAssign(_) => (1, Fixity::InfixRight),
+            Self::Infix(op) => op.as_operator(),
+        }
+    }
+
+    fn from_token(kind: TokenKind<'_>) -> Option<Self> {
+        match kind {
+            TokenKind::Eq => Some(Self::Assign),
+            TokenKind::PlusEq => Some(Self::InfixAssign(InfixOp::Add)),
+            TokenKind::MinusEq => Some(Self::InfixAssign(InfixOp::Sub)),
+            TokenKind::StarEq => Some(Self::InfixAssign(InfixOp::Mul)),
+            TokenKind::SlashEq => Some(Self::InfixAssign(InfixOp::Div)),
+            TokenKind::PercentEq => Some(Self::InfixAssign(InfixOp::Rem)),
+            TokenKind::CaretEq => Some(Self::InfixAssign(InfixOp::Pow)),
+            _ => InfixOp::from_token(kind).map(Self::Infix),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Block<'a> {
     pub stmts: Box<[Stmt<'a>]>,
     pub span:  Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Fn<'a> {
     pub name:   &'a str,
     pub params: Box<[&'a str]>,
     pub body:   Block<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ItemKind<'a> {
     Fn(Fn<'a>),
     Let(Local<'a>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Local<'a> {
     pub name: &'a str,
     pub bind: Option<Expr<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StmtKind<'a> {
     Item(Item<'a>),
     Expr(Expr<'a>),
@@ -185,13 +210,13 @@ impl StmtKind<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableEntry<'a> {
     pub key:   Expr<'a>,
     pub value: Expr<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExprKind<'a> {
     Unit,
     Ident(&'a str),
@@ -243,7 +268,7 @@ pub enum ExprKind<'a> {
     },
 
     Infix {
-        op:  InfixOp,
+        op:  AssignOp,
         lhs: Box<Expr<'a>>,
         rhs: Box<Expr<'a>>,
     },

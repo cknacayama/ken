@@ -4,8 +4,8 @@ use kenspan::{Span, Spand};
 use thiserror::Error;
 
 use crate::ast::{
-    self, Block, Expr, ExprKind, InfixOp, Item, ItemKind, Local, Operator, PrefixOp, Stmt,
-    StmtKind, TableEntry,
+    self, AssignOp, Block, Expr, ExprKind, Item, ItemKind, Local, Operator, PrefixOp,
+    Stmt, StmtKind, TableEntry,
 };
 use crate::token::{Token, TokenKind};
 
@@ -306,7 +306,7 @@ impl<'a> Parser<'a> {
     fn parse_infix(&mut self, mut lhs: Expr<'a>, min: u8) -> ParseResult<Expr<'a>> {
         while let Some(op) = self
             .peek()
-            .and_then(|tk| InfixOp::from_token(tk.kind))
+            .and_then(|tk| AssignOp::from_token(tk.kind))
             .map(Operator::as_data)
             .filter(|op| op.prec() >= min)
         {
@@ -314,7 +314,7 @@ impl<'a> Parser<'a> {
             let mut rhs = self.parse_prefix()?;
             while let Some(new) = self
                 .peek()
-                .and_then(|tk| InfixOp::from_token(tk.kind))
+                .and_then(|tk| AssignOp::from_token(tk.kind))
                 .map(Operator::as_data)
             {
                 if op.prec() == new.prec() && (op.fix() != op.fix() || op.fix().is_nonfix()) {

@@ -14,7 +14,7 @@ pub enum Op {
     Push(usize),
 
     PushBool(bool),
-    PushU32(u32),
+    PushInt(u32),
 
     MakeList(usize),
     MakeTuple(usize),
@@ -31,9 +31,12 @@ pub enum Op {
     Pow,
 
     Eq,
+    Ne,
 
     Lt,
     Le,
+    Gt,
+    Ge,
 
     Call(u8),
     CallMethod(u8, usize),
@@ -212,7 +215,7 @@ impl Display for Op {
             Self::Pop => write!(f, "pop"),
             Self::Push(at) => write!(f, "push data[{at}]"),
             Self::PushBool(b) => write!(f, "push {b}"),
-            Self::PushU32(x) => write!(f, "push {x}"),
+            Self::PushInt(x) => write!(f, "push {x}"),
             Self::MakeList(count) => write!(f, "make list[len = {count}]"),
             Self::MakeTuple(count) => write!(f, "make tuple[len = {count}]"),
             Self::MakeTable(count) => write!(f, "make table[len = {count}]"),
@@ -225,8 +228,11 @@ impl Display for Op {
             Self::Rem => write!(f, "rem"),
             Self::Pow => write!(f, "pow"),
             Self::Eq => write!(f, "eq"),
+            Self::Ne => write!(f, "ne"),
             Self::Lt => write!(f, "lt"),
             Self::Le => write!(f, "le"),
+            Self::Gt => write!(f, "gt"),
+            Self::Ge => write!(f, "ge"),
             Self::Call(n) => write!(f, "call[count = {n}]"),
             Self::CallMethod(n, method) => write!(f, "call method[data[{method}], count = {n}]"),
             Self::AddGlobal => write!(f, "add global"),

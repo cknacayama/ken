@@ -7,15 +7,8 @@ struct Range {
     start,
     end,
 
-    fn new(start, end) {
-        Range {
-            start: start,
-            end: end,
-        }
-    }
-
     fn next(self) {
-        if self >= end {
+        if self.start >= self.end {
             Option.None
         } else {
             let cur = self.start;

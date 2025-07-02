@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::hash::{BuildHasher, RandomState};
 use std::ops::{Deref, DerefMut};
 
-use crate::obj::StrRef;
+use crate::obj::{MutObj, Obj, StrRef};
 use crate::value::Value;
 use crate::{RuntimeError, RuntimeResult};
 
@@ -13,6 +13,7 @@ pub enum HashValue {
     Bool(bool),
     Int(i64),
     Str(StrRef),
+    Slice(Box<[HashValue]>),
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +80,51 @@ impl Display for HashValue {
             Self::Bool(b) => write!(f, "{b}"),
             Self::Int(x) => write!(f, "{x}"),
             Self::Str(s) => write!(f, "{s}"),
+            Self::Slice(s) => {
+                let mut first = true;
+                write!(f, "[")?;
+                for v in s {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                write!(f, "]")
+            }
+        }
+    }
+}
+
+impl Value {
+    #[must_use]
+    pub fn as_hash(&self) -> Option<HashValue> {
+        match self {
+            Self::Unit => Some(HashValue::Unit),
+            Self::Bool(b) => Some(HashValue::Bool(*b)),
+            Self::Int(x) => Some(HashValue::Int(*x)),
+            Self::Obj(obj) => match obj.as_ref() {
+                Obj::Str(s) => Some(HashValue::Str(s.clone())),
+                _ => None,
+            },
+            Self::MutObj(obj) => {
+                let obj = obj.borrow().ok()?;
+                match &*obj {
+                    MutObj::List(values) => values
+                        .iter()
+                        .map(Self::as_hash)
+                        .collect::<Option<_>>()
+                        .map(HashValue::Slice),
+                    MutObj::Tuple(values) => values
+                        .iter()
+                        .map(Self::as_hash)
+                        .collect::<Option<_>>()
+                        .map(HashValue::Slice),
+                    MutObj::Table(_) => todo!(),
+                }
+            }
+            Self::Float(_) => None,
         }
     }
 }

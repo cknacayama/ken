@@ -11,7 +11,8 @@ use kenvm::obj::{Function, StrRef};
 use kenvm::value::Value;
 
 use crate::ast::{
-    Block, Expr, ExprKind, Fn, InfixOp, Item, ItemKind, Local, PrefixOp, Stmt, StmtKind, TableEntry,
+    AssignOp, Block, Expr, ExprKind, Fn, InfixOp, Item, ItemKind, Local, PrefixOp, Stmt, StmtKind,
+    TableEntry,
 };
 
 pub struct GlobalMap {
@@ -221,11 +222,20 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
             ExprKind::String(s) => Ok(self.compile_str_expr(s, span)),
             ExprKind::Prefix { op, expr } => self.compile_prefix_expr(op, *expr, span),
             ExprKind::Infix {
-                op: InfixOp::Assign,
+                op: AssignOp::Assign,
                 lhs,
                 rhs,
             } => self.compile_assign(*lhs, *rhs, span),
-            ExprKind::Infix { op, lhs, rhs } => self.compile_infix_expr(op, *lhs, *rhs, span),
+            ExprKind::Infix {
+                op: AssignOp::InfixAssign(op),
+                lhs,
+                rhs,
+            } => self.compile_infix_assign(op, *lhs, *rhs, span),
+            ExprKind::Infix {
+                op: AssignOp::Infix(op),
+                lhs,
+                rhs,
+            } => self.compile_infix_expr(op, *lhs, *rhs, span),
             ExprKind::Block(block) => self.compile_block(block),
             ExprKind::If { cond, then, els } => self.compile_if(*cond, then, els, span),
             ExprKind::Call { callee, args } => self.compile_call(*callee, args, span),
@@ -449,7 +459,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
 
     fn compile_int_expr(&mut self, x: u32, span: Span) -> usize {
         self.inc_stack(1);
-        self.push_op(Op::PushU32(x), span)
+        self.push_op(Op::PushInt(x), span)
     }
 
     fn compile_bool_expr(&mut self, b: bool, span: Span) -> usize {
@@ -523,6 +533,23 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
         Ok(value)
     }
 
+    fn compile_infix_assign(
+        &mut self,
+        op: InfixOp,
+        lhs: Expr<'a>,
+        rhs: Expr<'a>,
+        span: Span,
+    ) -> CodegenResult<usize> {
+        let value = self.compile_expr(lhs.clone())?;
+        self.compile_expr(rhs)?;
+        self.push_op(Self::infix_to_op(op), span);
+        self.dec_stack(1);
+        self.compile_place(lhs, span)?;
+        self.dec_stack(1);
+        self.push_unit(span);
+        Ok(value)
+    }
+
     fn compile_prefix_expr(
         &mut self,
         op: PrefixOp,
@@ -538,6 +565,23 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
         Ok(start)
     }
 
+    const fn infix_to_op(op: InfixOp) -> Op {
+        match op {
+            InfixOp::Add => Op::Add,
+            InfixOp::Sub => Op::Sub,
+            InfixOp::Mul => Op::Mul,
+            InfixOp::Div => Op::Div,
+            InfixOp::Rem => Op::Rem,
+            InfixOp::Pow => Op::Pow,
+            InfixOp::Eq => Op::Eq,
+            InfixOp::Ne => Op::Ne,
+            InfixOp::Gt => Op::Gt,
+            InfixOp::Ge => Op::Ge,
+            InfixOp::Lt => Op::Lt,
+            InfixOp::Le => Op::Le,
+        }
+    }
+
     fn compile_infix_expr(
         &mut self,
         op: InfixOp,
@@ -547,31 +591,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
     ) -> CodegenResult<usize> {
         let start = self.compile_expr(lhs)?;
         let _ = self.compile_expr(rhs)?;
-        match op {
-            InfixOp::Add => self.push_op(Op::Add, span),
-            InfixOp::Sub => self.push_op(Op::Sub, span),
-            InfixOp::Mul => self.push_op(Op::Mul, span),
-            InfixOp::Div => self.push_op(Op::Div, span),
-            InfixOp::Rem => self.push_op(Op::Rem, span),
-            InfixOp::Pow => self.push_op(Op::Pow, span),
-            InfixOp::Eq => self.push_op(Op::Eq, span),
-            InfixOp::Ne => {
-                self.push_op(Op::Eq, span);
-                self.push_op(Op::Not, span)
-            }
-            InfixOp::Gt => {
-                self.push_op(Op::Le, span);
-                self.push_op(Op::Not, span)
-            }
-            InfixOp::Ge => {
-                self.push_op(Op::Lt, span);
-                self.push_op(Op::Not, span)
-            }
-            InfixOp::Lt => self.push_op(Op::Lt, span),
-            InfixOp::Le => self.push_op(Op::Le, span),
-
-            InfixOp::Assign => unreachable!(),
-        };
+        self.push_op(Self::infix_to_op(op), span);
         self.dec_stack(1);
         Ok(start)
     }

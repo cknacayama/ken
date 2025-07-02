@@ -1,6 +1,5 @@
 use std::fmt::Display;
 
-use crate::hash::HashValue;
 use crate::obj::{Function, MutObj, MutObjRef, Obj, ObjRef, StrRef};
 use crate::{RuntimeError, RuntimeResult};
 
@@ -28,20 +27,6 @@ impl Value {
             Ok(v)
         } else {
             Err(RuntimeError::TypeError)
-        }
-    }
-
-    #[must_use]
-    pub fn as_hash(&self) -> Option<HashValue> {
-        match self {
-            Self::Unit => Some(HashValue::Unit),
-            Self::Bool(b) => Some(HashValue::Bool(*b)),
-            Self::Int(x) => Some(HashValue::Int(*x)),
-            Self::Obj(obj) => match obj.as_ref() {
-                Obj::Str(s) => Some(HashValue::Str(s.clone())),
-                _ => None,
-            },
-            _ => None,
         }
     }
 }
