@@ -7,12 +7,14 @@ use kenspan::{Span, Spand};
 use kenvm::Vm;
 use kenvm::builtin::Builtin;
 use kenvm::bytecode::{ChunkBuilder, Op};
-use kenvm::obj::{Function, StrRef};
+use kenvm::hash::HashValue;
+use kenvm::obj::{Function, ObjRef, StrRef};
+use kenvm::ty::{Ctor, Ty, TyRef};
 use kenvm::value::Value;
 
 use crate::ast::{
-    AssignOp, Block, Expr, ExprKind, Fn, InfixOp, Item, ItemKind, Local, PrefixOp, Stmt, StmtKind,
-    TableEntry,
+    AssignOp, Block, Constructor, Expr, ExprKind, FnData, InfixOp, Item, ItemKind, Let, PrefixOp,
+    Stmt, StmtKind, Struct, TableEntry,
 };
 
 pub struct GlobalMap {
@@ -27,7 +29,7 @@ impl GlobalMap {
         let current = builtins.len() + builtin_types.len();
         let globals = builtins
             .into_iter()
-            .map(|b| vm.intern(b.name()).take())
+            .map(|b| vm.intern_str(b.name()).take())
             .chain(
                 builtin_types
                     .into_iter()
@@ -85,12 +87,17 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
     }
 
     #[must_use]
-    fn intern<S>(&mut self, s: S) -> StrRef
+    fn intern_str<S>(&mut self, s: S) -> StrRef
     where
         Rc<str>: From<S>,
         S: AsRef<str> + Hash + Eq,
     {
-        self.vm.intern(s)
+        self.vm.intern_str(s)
+    }
+
+    #[must_use]
+    fn intern_ty(&mut self, ty: Ty) -> TyRef {
+        self.vm.intern_ty(ty)
     }
 
     fn begin_scope(&mut self) -> usize {
@@ -114,7 +121,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
             scope.insert(name, pos);
             false
         } else {
-            let name = self.intern(name);
+            let name = self.intern_str(name);
             self.global.add(name.as_rc().clone());
             true
         }
@@ -167,7 +174,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
 
     #[must_use]
     pub fn finish(mut self) -> Function {
-        let name = self.name.map(|name| self.intern(name));
+        let name = self.name.map(|name| self.intern_str(name));
         self.push_ret();
         let chunk = self.chunk.finish();
         Function::new(name, self.arity as usize, chunk)
@@ -207,8 +214,10 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
 
     pub fn compile_item(&mut self, Item { kind, span }: Item<'a>) -> CodegenResult<usize> {
         match kind {
-            ItemKind::Fn(f) => self.compile_fn(f, span),
+            ItemKind::Fn(f) => self.compile_fn_item(f),
             ItemKind::Let(local) => self.compile_local(local, span),
+            ItemKind::Struct(Struct { ctor, methods }) => self.compile_struct(ctor, methods, span),
+            ItemKind::Enum(_) => todo!(),
         }
     }
 
@@ -242,29 +251,86 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
             ExprKind::While { cond, body } => self.compile_while(*cond, body, span),
             ExprKind::List { tuple, items } => self.compile_list(tuple, items, span),
             ExprKind::Idx { expr, idx } => self.compile_idx(*expr, *idx, span),
-            ExprKind::Table { fields } => self.compile_table(fields, span),
+            ExprKind::Table { entries: fields } => self.compile_table(fields, span),
             ExprKind::Field { expr, field } => self.compile_field(*expr, field, span),
             ExprKind::Lambda { params, expr } => self.compile_lambda(params, *expr, span),
         }
     }
 
-    fn compile_fn(
+    fn compile_struct(
         &mut self,
-        Fn { name, params, body }: Fn<'a>,
+        Constructor { name, fields, .. }: Constructor<'a>,
+        methods: Box<[FnData<'a>]>,
         span: Span,
     ) -> CodegenResult<usize> {
+        let interned = self.intern_str(name);
+        let mut ty = Ty::new(interned.clone());
+
+        let fields = fields
+            .into_iter()
+            .map(|field| self.intern_str(field))
+            .collect::<Box<_>>();
+        let field_count = fields
+            .len()
+            .try_into()
+            .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
+        let ctor = ObjRef::from(Ctor::new(interned.clone(), interned, fields));
+        ty.add_ctor(HashValue::Int(field_count), ctor);
+
+        for FnData {
+            name,
+            params,
+            body,
+            span,
+        } in methods
+        {
+            let body = Expr::new(ExprKind::Block(body), span);
+            let (_, method) = self.compile_fn::<false>(Some(name), params, body, span)?;
+            let name = self.intern_str(name);
+            ty.add_method(name, ObjRef::from(method));
+        }
+        let ty = self.intern_ty(ty);
+
+        let op = self.push_push(Value::from(ty), span);
+        self.bind_variable(name, span);
+
+        Ok(op)
+    }
+
+    fn compile_fn<const RECURSIVE: bool>(
+        &mut self,
+        name: Option<&'a str>,
+        params: Box<[&'a str]>,
+        body: Expr<'a>,
+        span: Span,
+    ) -> CodegenResult<(bool, Function)> {
         let count = u8::try_from(params.len())
             .map_err(|_| CodegenError::new(CodegenErrorKind::TooManyArgs, span))?;
-        let global = self.add_variable(name);
-        let mut codegen = Codegen::new(Some(name), count, self.global, self.vm);
+        let f = name.is_some_and(|name| RECURSIVE && self.add_variable(name));
+        let mut codegen = Codegen::new(name, count, self.global, self.vm);
         codegen.begin_scope();
         for param in params {
             codegen.add_variable(param);
         }
-        codegen.compile_block(body)?;
+        codegen.compile_expr(body)?;
         codegen.scope.pop().unwrap();
 
-        let f = Value::from(codegen.finish());
+        Ok((f, codegen.finish()))
+    }
+
+    fn compile_fn_item(
+        &mut self,
+        FnData {
+            name,
+            params,
+            body,
+            span,
+        }: FnData<'a>,
+    ) -> CodegenResult<usize> {
+        let body = Expr::new(ExprKind::Block(body), span);
+        let (global, f) = self.compile_fn::<true>(Some(name), params, body, span)?;
+
+        let f = Value::from(f);
         let op = self.push_push(f, span);
         if global {
             self.push_op(Op::AddGlobal, span);
@@ -273,7 +339,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
         Ok(op)
     }
 
-    fn compile_local(&mut self, local: Local<'a>, span: Span) -> CodegenResult<usize> {
+    fn compile_local(&mut self, local: Let<'a>, span: Span) -> CodegenResult<usize> {
         let bind = if let Some(bind) = local.bind {
             self.compile_expr(bind)?
         } else {
@@ -335,7 +401,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
         span: Span,
     ) -> CodegenResult<usize> {
         let expr = self.compile_expr(expr)?;
-        let field = self.intern(field);
+        let field = self.intern_str(field);
         self.push_push(Value::from(field), span);
         self.push_op(Op::LoadIdx, span);
         Ok(expr)
@@ -417,7 +483,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
     ) -> CodegenResult<usize> {
         let (callee, method) = match callee.kind {
             ExprKind::Field { expr, field } => {
-                let field = self.intern(field);
+                let field = self.intern_str(field);
                 let at = self.chunk.push_value(Value::from(field));
                 (self.compile_expr(*expr)?, Some(at))
             }
@@ -468,7 +534,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
     }
 
     fn compile_str_expr(&mut self, s: Cow<'a, str>, span: Span) -> usize {
-        let s = self.intern(s);
+        let s = self.intern_str(s);
         let op = self.push_push(Value::from(s), span);
         self.inc_stack(1);
         op
@@ -508,7 +574,7 @@ impl<'a, 'vm, 'glob> Codegen<'a, 'vm, 'glob> {
             }
             ExprKind::Field { expr, field } => {
                 let expr = self.compile_expr(*expr)?;
-                let field = self.intern(field);
+                let field = self.intern_str(field);
                 self.push_push(Value::from(field), span);
                 self.push_op(Op::StoreIdx, span);
                 self.dec_stack(1);

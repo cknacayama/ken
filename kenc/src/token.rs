@@ -79,12 +79,15 @@ impl<'a> TokenKind<'a> {
 
     #[must_use]
     pub const fn can_start_item(&self) -> bool {
-        matches!(self, Self::KwFn | Self::KwLet)
+        matches!(
+            self,
+            Self::KwFn | Self::KwLet | Self::KwStruct | Self::KwEnum
+        )
     }
 
     #[must_use]
     pub const fn can_recover(&self) -> bool {
-        matches!(self, Self::KwFn | Self::KwLet)
+        self.can_start_item()
     }
 }
 

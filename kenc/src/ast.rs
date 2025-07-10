@@ -177,20 +177,43 @@ pub struct Block<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Fn<'a> {
+pub struct FnData<'a> {
     pub name:   &'a str,
     pub params: Box<[&'a str]>,
     pub body:   Block<'a>,
+    pub span:   Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Constructor<'a> {
+    pub name:   &'a str,
+    pub fields: Box<[&'a str]>,
+    pub span:   Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Struct<'a> {
+    pub ctor:    Constructor<'a>,
+    pub methods: Box<[FnData<'a>]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Enum<'a> {
+    pub name:    &'a str,
+    pub ctors:   Box<[Constructor<'a>]>,
+    pub methods: Box<[FnData<'a>]>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ItemKind<'a> {
-    Fn(Fn<'a>),
-    Let(Local<'a>),
+    Fn(FnData<'a>),
+    Let(Let<'a>),
+    Struct(Struct<'a>),
+    Enum(Enum<'a>),
 }
 
 #[derive(Debug, Clone)]
-pub struct Local<'a> {
+pub struct Let<'a> {
     pub name: &'a str,
     pub bind: Option<Expr<'a>>,
 }
@@ -249,7 +272,7 @@ pub enum ExprKind<'a> {
     },
 
     Table {
-        fields: Box<[TableEntry<'a>]>,
+        entries: Box<[TableEntry<'a>]>,
     },
 
     Idx {

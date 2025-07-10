@@ -1,5 +1,4 @@
 use std::cell::{Ref, RefCell, RefMut};
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -8,7 +7,7 @@ use crate::builtin::Builtin;
 use crate::bytecode::Chunk;
 use crate::hash::Table;
 use crate::intern::Interned;
-use crate::ty::TyRef;
+use crate::ty::{Ctor, Instance, TyRef};
 use crate::value::Value;
 use crate::{RuntimeError, RuntimeResult};
 
@@ -61,12 +60,52 @@ impl Display for ObjRef {
     }
 }
 
+impl<T> From<T> for ObjRef
+where
+    Obj: From<T>,
+{
+    fn from(value: T) -> Self {
+        Self::new(Obj::from(value))
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Obj {
     Function(Function),
     Builtin(Builtin),
     Str(StrRef),
+    Ctor(Ctor),
     Ty(TyRef),
+}
+
+impl From<Function> for Obj {
+    fn from(v: Function) -> Self {
+        Self::Function(v)
+    }
+}
+
+impl From<Builtin> for Obj {
+    fn from(v: Builtin) -> Self {
+        Self::Builtin(v)
+    }
+}
+
+impl From<StrRef> for Obj {
+    fn from(v: StrRef) -> Self {
+        Self::Str(v)
+    }
+}
+
+impl From<TyRef> for Obj {
+    fn from(v: TyRef) -> Self {
+        Self::Ty(v)
+    }
+}
+
+impl From<Ctor> for Obj {
+    fn from(v: Ctor) -> Self {
+        Self::Ctor(v)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -74,6 +113,19 @@ pub enum MutObj {
     List(Vec<Value>),
     Tuple(Box<[Value]>),
     Table(Table<Value>),
+    Instance(Instance),
+}
+
+impl From<Instance> for MutObj {
+    fn from(v: Instance) -> Self {
+        Self::Instance(v)
+    }
+}
+
+impl From<Table<Value>> for MutObj {
+    fn from(v: Table<Value>) -> Self {
+        Self::Table(v)
+    }
 }
 
 impl From<Box<[Value]>> for MutObj {
@@ -89,11 +141,6 @@ impl From<Vec<Value>> for MutObj {
 }
 
 impl MutObj {
-    #[must_use]
-    pub(crate) const fn is_pretty(&self) -> bool {
-        matches!(self, Self::List(_))
-    }
-
     #[must_use]
     const fn as_list(&self) -> Option<&[Value]> {
         if let Self::List(v) = self {
@@ -132,19 +179,19 @@ impl MutObj {
 
     #[must_use]
     const fn as_table(&self) -> Option<&Table<Value>> {
-        if let Self::Table(v) = self {
-            Some(v)
-        } else {
-            None
+        match self {
+            Self::Table(table) => Some(table),
+            Self::Instance(instance) => Some(instance.fields()),
+            _ => None,
         }
     }
 
     #[must_use]
     const fn as_table_mut(&mut self) -> Option<&mut Table<Value>> {
-        if let Self::Table(v) = self {
-            Some(v)
-        } else {
-            None
+        match self {
+            Self::Table(table) => Some(table),
+            Self::Instance(instance) => Some(instance.fields_mut()),
+            _ => None,
         }
     }
 }
@@ -273,12 +320,6 @@ impl Function {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Instance {
-    ty:     TyRef,
-    fields: HashMap<StrRef, ObjRef>,
-}
-
-#[derive(Debug, PartialEq)]
 pub struct Closure {
     captures: Vec<Value>,
     function: Function,
@@ -316,7 +357,7 @@ impl Display for MutObj {
             Self::Table(values) => {
                 write!(f, "{{")?;
                 let mut first = true;
-                for (key, value) in values.iter() {
+                for (key, value) in values {
                     if first {
                         first = false;
                     } else {
@@ -325,6 +366,23 @@ impl Display for MutObj {
                     write!(f, "{key}: {value}")?;
                 }
                 write!(f, "}}")
+            }
+            Self::Instance(obj) => {
+                write!(f, "{}", obj.ctor())?;
+                if obj.fields().is_empty() {
+                    return Ok(());
+                }
+                write!(f, " {{ ")?;
+                let mut first = true;
+                for (key, value) in obj.fields() {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{key}: {value}")?;
+                }
+                write!(f, " }}")
             }
         }
     }
@@ -338,6 +396,7 @@ impl Display for Obj {
                 None => write!(f, "fn{{ arity: {} }}", function.arity()),
             },
             Self::Builtin(builtin) => write!(f, "builtin '{}'", builtin.name()),
+            Self::Ctor(ctor) => write!(f, "ctor '{}'", ctor.name()),
             Self::Str(string) => write!(f, "{string}"),
             Self::Ty(ty) => write!(f, "{ty}"),
         }

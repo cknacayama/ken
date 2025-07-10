@@ -1,7 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::hash::Hash;
 use std::rc::Rc;
+
+use crate::obj::StrRef;
+use crate::ty::Ty;
 
 #[derive(Debug)]
 pub struct Interned<T: ?Sized>(Rc<T>);
@@ -79,6 +82,15 @@ where
             self.insert(value.clone());
             Interned::new(value)
         }
+    }
+}
+impl<S: std::hash::BuildHasher> Intern<Ty> for HashMap<StrRef, Rc<Ty>, S> {
+    fn intern(&mut self, value: Ty) -> Interned<Ty> {
+        let ty = self
+            .entry(value.name().clone())
+            .or_insert_with(|| Rc::new(value))
+            .clone();
+        Interned::new(ty)
     }
 }
 

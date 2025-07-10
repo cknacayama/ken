@@ -6,7 +6,7 @@
 use std::fmt::Display;
 
 use crate::hash::{HashValue, Table};
-use crate::obj::{MutObj, MutObjRef, Obj, ObjRef};
+use crate::obj::{MutObj, Obj, ObjRef};
 use crate::value::Value;
 use crate::{RuntimeError, RuntimeResult, Vm};
 
@@ -55,6 +55,7 @@ fn len(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
                 MutObj::List(values) => try_cast_int_value(values.len()),
                 MutObj::Tuple(values) => try_cast_int_value(values.len()),
                 MutObj::Table(values) => try_cast_int_value(values.len()),
+                MutObj::Instance(_) => Err(RuntimeError::TypeError),
             }
         }
         Value::Obj(obj) => match obj.as_ref() {
@@ -98,7 +99,7 @@ fn table(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
                 for (i, value) in values.iter().enumerate() {
                     table.insert(HashValue::Int(i as i64), value.clone());
                 }
-                Ok(Value::MutObj(MutObjRef::new(MutObj::Table(table))))
+                Ok(Value::from(MutObj::Table(table)))
             }
             MutObj::Tuple(values) => {
                 assert!(i64::try_from(values.len()).is_ok());
@@ -106,9 +107,10 @@ fn table(_: &Vm, args: &[Value]) -> RuntimeResult<Value> {
                 for (i, value) in values.iter().enumerate() {
                     table.insert(HashValue::Int(i as i64), value.clone());
                 }
-                Ok(Value::MutObj(MutObjRef::new(MutObj::Table(table))))
+                Ok(Value::from(MutObj::Table(table)))
             }
             MutObj::Table(_) => Ok(arg.clone()),
+            MutObj::Instance(obj) => Ok(Value::from(MutObj::Table(obj.fields().clone()))),
         },
         _ => Err(RuntimeError::TypeError),
     }

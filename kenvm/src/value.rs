@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::obj::{Function, MutObj, MutObjRef, Obj, ObjRef, StrRef};
+use crate::obj::{MutObj, MutObjRef, ObjRef};
 use crate::{RuntimeError, RuntimeResult};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,8 +41,7 @@ impl Display for Value {
             Self::MutObj(obj) => {
                 let ptr = obj.as_ptr();
                 match obj.borrow() {
-                    Ok(obj) if obj.is_pretty() => write!(f, "{obj}"),
-                    Ok(obj) => write!(f, "<{obj} at {ptr:?}>"),
+                    Ok(obj) => write!(f, "{obj}"),
                     Err(_) => write!(f, "<mut obj at {ptr:?}>"),
                 }
             }
@@ -79,15 +78,6 @@ macro_rules! value_impl {
         }
     };
 
-    ($val:ty, obj $variant:ident) => {
-        impl From<$val> for Value {
-            fn from(value: $val) -> Self {
-                let obj = Obj::$variant(value);
-                Self::Obj(ObjRef::new(obj))
-            }
-        }
-    };
-
     ($val:ty, mut obj $variant:ident) => {
         impl From<$val> for Value {
             fn from(value: $val) -> Self {
@@ -101,9 +91,6 @@ macro_rules! value_impl {
 value_impl!(f64, Float);
 value_impl!(i64, Int);
 value_impl!(bool, Bool);
-value_impl!(MutObjRef, MutObj);
-value_impl!(Function, obj Function);
-value_impl!(StrRef, obj Str);
 value_impl!(Vec<Value>, mut obj List);
 value_impl!(Box<[Value]>, mut obj Tuple);
 
@@ -111,5 +98,14 @@ impl From<MutObj> for Value {
     fn from(value: MutObj) -> Self {
         let obj = MutObjRef::new(value);
         Self::MutObj(obj)
+    }
+}
+
+impl<T> From<T> for Value
+where
+    ObjRef: From<T>,
+{
+    fn from(value: T) -> Self {
+        Self::Obj(ObjRef::from(value))
     }
 }

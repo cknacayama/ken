@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -40,15 +40,23 @@ impl Ty {
         }
     }
 
-    fn add_builtin<'a>(&mut self, set: &mut impl InternRef<'a, str>, method: Builtin) {
-        let name = set.intern_ref(method.name());
-        let method = ObjRef::new(Obj::Builtin(method));
+    pub fn add_method(&mut self, name: StrRef, method: ObjRef) {
         self.methods.insert(name, method);
     }
 
-    fn add_ctor(&mut self, key: HashValue, ctor: Builtin) {
-        let method = ObjRef::new(Obj::Builtin(ctor));
-        self.ctors.insert(key, method);
+    pub fn add_ctor(&mut self, key: HashValue, ctor: ObjRef) {
+        self.ctors.insert(key, ctor);
+    }
+
+    fn add_builtin<'a>(&mut self, set: &mut impl InternRef<'a, str>, method: Builtin) {
+        let name = set.intern_ref(method.name());
+        let method = ObjRef::new(Obj::Builtin(method));
+        self.add_method(name, method);
+    }
+
+    fn add_builtin_ctor(&mut self, key: HashValue, ctor: Builtin) {
+        let ctor = ObjRef::new(Obj::Builtin(ctor));
+        self.add_ctor(key, ctor);
     }
 
     #[must_use]
@@ -75,6 +83,64 @@ impl Display for Ty {
 
 pub type TyRef = Interned<Ty>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ctor {
+    ty:     StrRef,
+    name:   StrRef,
+    fields: Box<[StrRef]>,
+}
+
+impl Ctor {
+    #[must_use]
+    pub const fn new(ty: StrRef, name: StrRef, fields: Box<[StrRef]>) -> Self {
+        Self { ty, name, fields }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &StrRef {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn fields(&self) -> &[StrRef] {
+        &self.fields
+    }
+
+    #[must_use]
+    pub const fn ty(&self) -> &StrRef {
+        &self.ty
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Instance {
+    ty:     TyRef,
+    ctor:   StrRef,
+    fields: Table<Value>,
+}
+
+impl Instance {
+    #[must_use] pub const fn new(ty: TyRef, ctor: StrRef, fields: Table<Value>) -> Self {
+        Self { ty, ctor, fields }
+    }
+
+    #[must_use] pub const fn fields(&self) -> &Table<Value> {
+        &self.fields
+    }
+
+    pub const fn fields_mut(&mut self) -> &mut Table<Value> {
+        &mut self.fields
+    }
+
+    #[must_use] pub const fn ty(&self) -> &TyRef {
+        &self.ty
+    }
+
+    #[must_use] pub const fn ctor(&self) -> &StrRef {
+        &self.ctor
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TyCtx {
     unit_:   Rc<Ty>,
@@ -89,7 +155,7 @@ pub struct TyCtx {
     tuple_:  Rc<Ty>,
     table_:  Rc<Ty>,
 
-    types: HashSet<Rc<Ty>>,
+    types: HashMap<StrRef, Rc<Ty>>,
 }
 
 impl TyCtx {
@@ -112,11 +178,11 @@ impl TyCtx {
         tuple_.add_builtin(set, Builtin::len());
         table_.add_builtin(set, Builtin::len());
 
-        ty_.add_ctor(HashValue::Int(1), Builtin::typ_());
-        table_.add_ctor(HashValue::Int(1), Builtin::table());
+        ty_.add_builtin_ctor(HashValue::Int(1), Builtin::typ_());
+        table_.add_builtin_ctor(HashValue::Int(1), Builtin::table());
 
         #[allow(clippy::mutable_key_type)]
-        let mut types = HashSet::new();
+        let mut types = HashMap::new();
         let unit_ = types.intern(unit_).take();
         let int_ = types.intern(int_).take();
         let bool_ = types.intern(bool_).take();
@@ -177,7 +243,7 @@ impl TyCtx {
     #[must_use]
     pub fn type_of_obj(&self, obj: &Obj) -> TyRef {
         match obj {
-            Obj::Function(_) => TyRef::new(self.fn_.clone()),
+            Obj::Function(_) | Obj::Ctor(_) => TyRef::new(self.fn_.clone()),
             Obj::Builtin(_) => TyRef::new(self.bultin_.clone()),
             Obj::Str(_) => TyRef::new(self.str_.clone()),
             Obj::Ty(_) => TyRef::new(self.ty_.clone()),
@@ -190,16 +256,15 @@ impl TyCtx {
             MutObj::List(_) => TyRef::new(self.list_.clone()),
             MutObj::Tuple(_) => TyRef::new(self.tuple_.clone()),
             MutObj::Table(_) => TyRef::new(self.table_.clone()),
+            MutObj::Instance(obj) => obj.ty.clone(),
         }
     }
 
     pub fn intern(&mut self, ty: Ty) -> TyRef {
-        if let Some(ty) = self.types.get(&ty) {
-            TyRef::new(ty.clone())
-        } else {
-            let ty = Rc::new(ty);
-            self.types.insert(ty.clone());
-            TyRef::new(ty)
-        }
+        self.types.intern(ty)
+    }
+
+    pub fn get(&self, ty_name: &StrRef) -> Option<TyRef> {
+        self.types.get(ty_name).cloned().map(TyRef::new)
     }
 }

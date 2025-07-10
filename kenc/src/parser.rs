@@ -4,8 +4,8 @@ use kenspan::{Span, Spand};
 use thiserror::Error;
 
 use crate::ast::{
-    self, AssignOp, Block, Expr, ExprKind, Item, ItemKind, Local, Operator, PrefixOp,
-    Stmt, StmtKind, TableEntry,
+    AssignOp, Block, Constructor, Enum, Expr, ExprKind, FnData, Item, ItemKind, Let,
+    Operator, PrefixOp, Stmt, StmtKind, Struct, TableEntry,
 };
 use crate::token::{Token, TokenKind};
 
@@ -204,23 +204,117 @@ impl<'a> Parser<'a> {
                 };
                 let semi = self.expect(TokenKind::Semicolon)?;
                 let span = span.join(semi);
-                let kind = ItemKind::Let(Local { name, bind });
+                let kind = ItemKind::Let(Let { name, bind });
                 Ok(Item::new(kind, span))
             }
             TokenKind::KwFn => {
-                let name = self.expect_name()?;
-                let (params, _) = self.expect_delimited(Paren, Self::expect_name)?;
-                let body = self.expect_block()?;
-                let span = span.join(body.span);
-                let kind = ItemKind::Fn(ast::Fn {
-                    name,
-                    params: params.into_boxed_slice(),
-                    body,
-                });
+                let f = self.parse_fn(span)?;
+                let span = f.span;
+                let kind = ItemKind::Fn(f);
+                Ok(Item::new(kind, span))
+            }
+            TokenKind::KwStruct => {
+                let (s, span) = self.parse_struct(span)?;
+                let kind = ItemKind::Struct(s);
+                Ok(Item::new(kind, span))
+            }
+            TokenKind::KwEnum => {
+                let (enu, span) = self.parse_enum(span)?;
+                let kind = ItemKind::Enum(enu);
                 Ok(Item::new(kind, span))
             }
             _ => Err(ParseError::new(ParseErrorKind::ExpectedItem, span)),
         }
+    }
+
+    fn parse_fn(&mut self, span: Span) -> ParseResult<FnData<'a>> {
+        let name = self.expect_name()?;
+        let (params, _) = self.expect_delimited(Paren, Self::expect_name)?;
+        let body = self.expect_block()?;
+        let span = span.join(body.span);
+        Ok(FnData {
+            name,
+            params,
+            body,
+            span,
+        })
+    }
+
+    fn parse_struct(&mut self, span: Span) -> ParseResult<(Struct<'a>, Span)> {
+        let name = self.expect_name()?;
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+
+        self.expect(TokenKind::LBrace)?;
+
+        while !self.check_kind(TokenKind::RBrace) {
+            let Token { kind, span } = self.next()?;
+            match kind {
+                TokenKind::Ident(id) => {
+                    fields.push(id);
+                    if self.next_if_kind(TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+                TokenKind::KwFn => {
+                    let f = self.parse_fn(span)?;
+                    methods.push(f);
+                }
+                _ => return Err(ParseError::new(ParseErrorKind::ExpectedIdent, span)),
+            }
+        }
+
+        let span = span.join(self.expect(TokenKind::RBrace)?);
+        let ctor = Constructor {
+            name,
+            fields: fields.into_boxed_slice(),
+            span,
+        };
+        let struc = Struct {
+            ctor,
+            methods: methods.into_boxed_slice(),
+        };
+
+        Ok((struc, span))
+    }
+
+    fn parse_enum(&mut self, span: Span) -> ParseResult<(Enum<'a>, Span)> {
+        let name = self.expect_name()?;
+        let mut ctors = Vec::new();
+        let mut methods = Vec::new();
+        self.expect(TokenKind::LBrace)?;
+        while !self.check_kind(TokenKind::RBrace) {
+            let Token { kind, mut span } = self.next()?;
+            match kind {
+                TokenKind::Ident(name) => {
+                    let fields = if let Some(opening) = self.next_if_kind(TokenKind::LParen) {
+                        let (fields, fields_span) =
+                            self.parse_delimited(Paren, opening, Self::expect_name)?;
+                        span = span.join(fields_span);
+                        fields
+                    } else {
+                        Box::from([])
+                    };
+                    let ctor = Constructor { name, fields, span };
+                    ctors.push(ctor);
+                    if self.next_if_kind(TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+                TokenKind::KwFn => {
+                    let f = self.parse_fn(span)?;
+                    methods.push(f);
+                }
+                _ => return Err(ParseError::new(ParseErrorKind::ExpectedIdent, span)),
+            }
+        }
+        let span = span.join(self.expect(TokenKind::RBrace)?);
+        let enu = Enum {
+            name,
+            ctors: ctors.into_boxed_slice(),
+            methods: methods.into_boxed_slice(),
+        };
+        Ok((enu, span))
     }
 
     pub fn parse_expr(&mut self) -> ParseResult<Expr<'a>> {
@@ -228,21 +322,21 @@ impl<'a> Parser<'a> {
         self.parse_infix(expr, 0)
     }
 
-    fn expect_delimited<D: Delim, T>(
+    fn expect_delimited<D: Delim, T, R: From<Vec<T>>>(
         &mut self,
         delim: D,
         parse: impl Fn(&mut Self) -> ParseResult<T>,
-    ) -> ParseResult<(Vec<T>, Span)> {
+    ) -> ParseResult<(R, Span)> {
         let opening = self.expect(D::opening())?;
         self.parse_delimited(delim, opening, parse)
     }
 
-    fn parse_delimited<D: Delim, T>(
+    fn parse_delimited<D: Delim, T, R: From<Vec<T>>>(
         &mut self,
         _: D,
         opening: Span,
         parse: impl Fn(&mut Self) -> ParseResult<T>,
-    ) -> ParseResult<(Vec<T>, Span)> {
+    ) -> ParseResult<(R, Span)> {
         let mut data = Vec::new();
 
         while !self.check_kind(D::closing()) {
@@ -256,7 +350,7 @@ impl<'a> Parser<'a> {
         let closing = self.expect(D::closing())?;
         let span = opening.join(closing);
 
-        Ok((data, span))
+        Ok((data.into(), span))
     }
 
     fn parse_many_stmts(&mut self) -> ParseResult<Expr<'a>> {
@@ -373,7 +467,7 @@ impl<'a> Parser<'a> {
                     let span = expr.span.join(span);
                     let kind = ExprKind::Call {
                         callee: Box::new(expr),
-                        args:   args.into_boxed_slice(),
+                        args,
                     };
                     expr = Expr::new(kind, span);
                 }
@@ -440,21 +534,19 @@ impl<'a> Parser<'a> {
                 let (entries, entries_span) =
                     self.parse_delimited(Brace, span, Self::parse_entry)?;
                 let span = span.join(entries_span);
-                let kind = ExprKind::Table {
-                    fields: entries.into_boxed_slice(),
-                };
+                let kind = ExprKind::Table { entries };
                 Ok(Expr::new(kind, span))
             }
             TokenKind::LBracket => {
                 let (items, span) = self.parse_delimited(Bracket, span, Self::parse_expr)?;
                 let kind = ExprKind::List {
                     tuple: false,
-                    items: items.into_boxed_slice(),
+                    items,
                 };
                 Ok(Expr::new(kind, span))
             }
             TokenKind::LParen => {
-                let (mut items, span) =
+                let (mut items, span): (Vec<_>, _) =
                     self.parse_delimited(Paren, span, Self::parse_many_stmts)?;
 
                 let kind = match items.len() {
@@ -477,8 +569,8 @@ impl<'a> Parser<'a> {
                 };
                 let span = span.join(expr.span);
                 let kind = ExprKind::Lambda {
-                    params: params.into_boxed_slice(),
-                    expr:   Box::new(expr),
+                    params,
+                    expr: Box::new(expr),
                 };
                 Ok(Expr::new(kind, span))
             }

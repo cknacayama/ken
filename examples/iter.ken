@@ -12,7 +12,7 @@ struct Range {
             Option.None
         } else {
             let cur = self.start;
-            self.start = self.start + 1;
+            self.start += 1;
             Option.Some(cur)
         }
     }

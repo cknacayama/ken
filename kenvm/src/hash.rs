@@ -56,6 +56,35 @@ impl<V, S: Default> Table<V, S> {
     }
 }
 
+impl<V, S> IntoIterator for Table<V, S> {
+    type Item = (HashValue, V);
+    type IntoIter = std::collections::hash_map::IntoIter<HashValue, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.table.into_iter()
+    }
+}
+
+impl<'a, V, S> IntoIterator for &'a Table<V, S> {
+    type Item = (&'a HashValue, &'a V);
+    type IntoIter = std::collections::hash_map::Iter<'a, HashValue, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.table.iter()
+    }
+}
+
+impl<V, S: Default + BuildHasher> FromIterator<(HashValue, V)> for Table<V, S> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (HashValue, V)>,
+    {
+        Self {
+            table: HashMap::from_iter(iter),
+        }
+    }
+}
+
 impl<V, S: BuildHasher> Table<V, S> {
     pub fn try_get(&self, k: &Value) -> RuntimeResult<&V> {
         let k = k.as_hash().ok_or(RuntimeError::NotHash)?;
@@ -122,6 +151,7 @@ impl Value {
                         .collect::<Option<_>>()
                         .map(HashValue::Slice),
                     MutObj::Table(_) => todo!(),
+                    MutObj::Instance(_) => todo!(),
                 }
             }
             Self::Float(_) => None,

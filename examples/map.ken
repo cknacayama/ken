@@ -3,7 +3,7 @@ fn map(list, f) {
     let i = 0;
     while i < list.len() {
         mapped.push(f(list[i]));
-        i = i + 1;
+        i += 1;
     };
     mapped
 }

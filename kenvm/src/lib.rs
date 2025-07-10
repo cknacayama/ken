@@ -17,7 +17,7 @@ use crate::builtin::Builtin;
 use crate::bytecode::{Chunk, Op, OpStream};
 use crate::hash::{HashValue, Table};
 use crate::obj::{Function, MutObj, Obj, ObjRef, StrRef};
-use crate::ty::{TyCtx, TyRef};
+use crate::ty::{Instance, Ty, TyCtx, TyRef};
 use crate::value::Value;
 
 #[derive(Debug, Clone)]
@@ -111,7 +111,7 @@ impl Vm {
         &self.ctx
     }
 
-    pub fn intern<S>(&mut self, string: S) -> StrRef
+    pub fn intern_str<S>(&mut self, string: S) -> StrRef
     where
         Rc<str>: From<S>,
         S: AsRef<str> + Hash + Eq,
@@ -123,6 +123,10 @@ impl Vm {
             self.strings.insert(obj.clone());
             StrRef::new(obj)
         }
+    }
+
+    pub fn intern_ty(&mut self, ty: Ty) -> TyRef {
+        self.ctx.intern(ty)
     }
 
     fn eval_function(&mut self, function: &Function) -> FrameResult<()> {
@@ -200,7 +204,7 @@ impl Vm {
         if self.sp() < len {
             return Err(RuntimeError::StackUnderflow);
         }
-        Ok(self.stack.drain(self.stack.len() - len..))
+        Ok(self.stack.drain(self.sp() - len..))
     }
 
     const fn load_stack(&self, offset: usize) -> RuntimeResult<&Value> {
@@ -259,6 +263,10 @@ impl Vm {
                     MutObj::Table(table) => table
                         .get(&HashValue::Int(idx))
                         .ok_or(RuntimeError::NoValue)?,
+                    MutObj::Instance(obj) => obj
+                        .fields()
+                        .get(&HashValue::Int(idx))
+                        .ok_or(RuntimeError::NoValue)?,
                 };
                 self.push_stack(item.clone());
 
@@ -293,6 +301,10 @@ impl Vm {
                         )
                         .ok_or(RuntimeError::OutOfBounds)?,
                     MutObj::Table(table) => table
+                        .get_mut(&HashValue::Int(idx))
+                        .ok_or(RuntimeError::NoValue)?,
+                    MutObj::Instance(obj) => obj
+                        .fields_mut()
                         .get_mut(&HashValue::Int(idx))
                         .ok_or(RuntimeError::NoValue)?,
                 };
@@ -332,6 +344,27 @@ impl Vm {
                     .get_ctor(&HashValue::Int(i64::from(count)))
                     .ok_or(RuntimeError::ArityError)?;
                 self.call(ctor.as_ref(), count)
+            }
+            Obj::Ctor(ctor) => {
+                let ty = self
+                    .ctx
+                    .get(ctor.ty())
+                    .ok_or(RuntimeError::GlobalNotFound)?;
+                let count = count as usize;
+                let values = self.drain(count)?;
+                let fields = ctor.fields();
+                if count != fields.len() {
+                    return Err(Box::from(RuntimeError::ArityError));
+                }
+                let fields = fields
+                    .iter()
+                    .map(|name| HashValue::Str(name.clone()))
+                    .zip(values)
+                    .collect();
+                let instance = Instance::new(ty, ctor.name().clone(), fields);
+                let value = Value::from(MutObj::from(instance));
+                self.push_stack(value);
+                Ok(())
             }
             _ => Err(Box::from(RuntimeError::TypeError)),
         }

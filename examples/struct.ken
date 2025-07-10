@@ -1,0 +1,24 @@
+struct Cat {
+    name,
+
+    fn meow(self) {
+        print("Meow, I am ");
+        println(self.name);
+    }
+
+    fn print(self) {
+        println(self);
+    }
+}
+
+fn main() {
+    let i = 0;
+    while i < 1_000_000 {
+        let cat = Cat("gato");
+        cat.meow();
+        cat.print();
+        i += 1;
+    }
+}
+
+main();
